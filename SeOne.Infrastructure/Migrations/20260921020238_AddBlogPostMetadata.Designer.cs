@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using SeOne.Infrastructure.Persistence;
 
@@ -11,9 +12,11 @@ using SeOne.Infrastructure.Persistence;
 namespace SeOne.Infrastructure.Migrations
 {
     [DbContext(typeof(SeOneDbContext))]
-    partial class SeOneDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260921020238_AddBlogPostMetadata")]
+    partial class AddBlogPostMetadata
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -425,50 +428,6 @@ namespace SeOne.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("LessonProgress", (string)null);
-                });
-
-            modelBuilder.Entity("SeOne.Domain.Entities.OtpCode", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("CodeHash")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("nvarchar(128)");
-
-                    b.Property<DateTime?>("ConsumedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<DateTime>("ExpiresAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<int>("FailedAttempts")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int")
-                        .HasDefaultValue(0);
-
-                    b.Property<string>("PhoneNumber")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("nvarchar(32)");
-
-                    b.Property<string>("Salt")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("nvarchar(128)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("PhoneNumber", "ConsumedAt");
-
-                    b.HasIndex("PhoneNumber", "ExpiresAt");
-
-                    b.ToTable("OtpCodes", (string)null);
                 });
 
             modelBuilder.Entity("SeOne.Domain.Entities.TeacherAvailability", b =>

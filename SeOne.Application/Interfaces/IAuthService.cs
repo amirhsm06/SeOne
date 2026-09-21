@@ -13,7 +13,14 @@ public interface IAuthService
     Task<AuthResponseDto?> LoginAsync(
         string email,
         string password);
-    Task<bool> RequestOtpAsync(string phone);
 
-    Task<AuthResponseDto?> VerifyOtpAsync(string phone, string code);
+    Task<bool> RequestOtpAsync(
+        string phone);
+
+    Task<AuthResponseDto?> VerifyOtpAsync(
+        string phone,
+        string code);
+
+    Task<bool> ForgotPasswordAsync(
+        string email);
 }

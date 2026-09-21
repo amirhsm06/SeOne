@@ -14,6 +14,12 @@ public class BlogPost
 
     public string? ImageUrl { get; set; }
 
+    public string Author { get; set; } = "SE ONE Journal";
+
+    public string ReadTime { get; set; } = "5 min";
+
+    public string Category { get; set; } = "General";
+
     public string Language { get; set; } = string.Empty;
 
     public bool IsPublished { get; set; }

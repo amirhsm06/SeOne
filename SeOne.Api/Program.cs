@@ -79,6 +79,8 @@ builder.Services
 
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IOtpSender, LoggingOtpSender>();
+builder.Services.AddScoped<IEmailSender, LoggingEmailSender>();
 builder.Services.AddScoped<ICourseService, CourseService>();
 builder.Services.AddScoped<IEnrollmentService, EnrollmentService>();
 builder.Services.AddScoped<ICourseModuleService, CourseModuleService>();

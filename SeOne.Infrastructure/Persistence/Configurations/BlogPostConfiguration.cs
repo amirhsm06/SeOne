@@ -24,6 +24,21 @@ public class BlogPostConfiguration : IEntityTypeConfiguration<BlogPost>
         builder.Property(b => b.ImageUrl)
             .HasMaxLength(500);
 
+        builder.Property(b => b.Author)
+            .IsRequired()
+            .HasMaxLength(150)
+            .HasDefaultValue("SE ONE Journal");
+
+        builder.Property(b => b.ReadTime)
+            .IsRequired()
+            .HasMaxLength(50)
+            .HasDefaultValue("5 min");
+
+        builder.Property(b => b.Category)
+            .IsRequired()
+            .HasMaxLength(100)
+            .HasDefaultValue("General");
+
         builder.Property(b => b.Language)
             .IsRequired()
             .HasMaxLength(10);
@@ -33,5 +48,9 @@ public class BlogPostConfiguration : IEntityTypeConfiguration<BlogPost>
 
         builder.Property(b => b.CreatedAt)
             .IsRequired();
+
+        builder.HasIndex(b => b.Language);
+
+        builder.HasIndex(b => b.IsPublished);
     }
 }
