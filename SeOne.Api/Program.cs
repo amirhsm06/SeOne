@@ -95,6 +95,13 @@ builder.Services.AddScoped<ICourseDetailsService, CourseDetailsService>();
 builder.Services.AddScoped<ITeacherCourseStudentService, TeacherCourseStudentService>();
 builder.Services.AddScoped<IBlogService, BlogService>();
 builder.Services.AddScoped<IBookingService, BookingService>();
+builder.Services.AddScoped<IWishlistService, WishlistService>();
+builder.Services.AddScoped<IReviewService, ReviewService>();
+builder.Services.AddScoped<IAssignmentService, AssignmentService>();
+builder.Services.AddScoped<INotificationService,NotificationService>();
+builder.Services.AddScoped<IMessagingService,MessagingService>();
+builder.Services.AddScoped<IPaymentGateway, DevelopmentPaymentGateway>();
+builder.Services.AddScoped<IPaymentService, PaymentService>();
 
 var app = builder.Build();
 

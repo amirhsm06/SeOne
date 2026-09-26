@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using SeOne.Infrastructure.Persistence;
 
@@ -11,9 +12,11 @@ using SeOne.Infrastructure.Persistence;
 namespace SeOne.Infrastructure.Migrations
 {
     [DbContext(typeof(SeOneDbContext))]
-    partial class SeOneDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260926133506_AddWishlist")]
+    partial class AddWishlist
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -153,123 +156,6 @@ namespace SeOne.Infrastructure.Migrations
                     b.ToTable("AspNetUserTokens", (string)null);
                 });
 
-            modelBuilder.Entity("SeOne.Domain.Entities.Assignment", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("Attachments")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<Guid>("CourseId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid?>("CourseModuleId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("Description")
-                        .IsRequired()
-                        .HasMaxLength(5000)
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<DateTime>("DueDate")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("Instructions")
-                        .HasMaxLength(5000)
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<bool>("IsPublished")
-                        .HasColumnType("bit");
-
-                    b.Property<decimal>("MaxPoints")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("decimal(18,2)");
-
-                    b.Property<Guid>("TeacherId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("Title")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("nvarchar(200)");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CourseId");
-
-                    b.HasIndex("CourseModuleId");
-
-                    b.HasIndex("TeacherId");
-
-                    b.HasIndex("TeacherId", "IsPublished");
-
-                    b.ToTable("Assignments", (string)null);
-                });
-
-            modelBuilder.Entity("SeOne.Domain.Entities.AssignmentSubmission", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid>("AssignmentId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("Attachments")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("Content")
-                        .IsRequired()
-                        .HasMaxLength(20000)
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("Feedback")
-                        .HasMaxLength(5000)
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<decimal?>("Grade")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("decimal(18,2)");
-
-                    b.Property<DateTime?>("GradedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<Guid?>("GradedById")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("int");
-
-                    b.Property<Guid>("StudentId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTime>("SubmittedAt")
-                        .HasColumnType("datetime2");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("AssignmentId");
-
-                    b.HasIndex("GradedById");
-
-                    b.HasIndex("StudentId");
-
-                    b.HasIndex("AssignmentId", "StudentId")
-                        .IsUnique();
-
-                    b.ToTable("AssignmentSubmissions", (string)null);
-                });
-
             modelBuilder.Entity("SeOne.Domain.Entities.BlogPost", b =>
                 {
                     b.Property<Guid>("Id")
@@ -369,63 +255,6 @@ namespace SeOne.Infrastructure.Migrations
                     b.HasIndex("TeacherId", "StartTime");
 
                     b.ToTable("Bookings", (string)null);
-                });
-
-            modelBuilder.Entity("SeOne.Domain.Entities.Conversation", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<Guid?>("RelatedAssignmentId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid?>("RelatedCourseId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("Subject")
-                        .HasMaxLength(300)
-                        .HasColumnType("nvarchar(300)");
-
-                    b.Property<int>("Type")
-                        .HasColumnType("int");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("RelatedAssignmentId");
-
-                    b.HasIndex("RelatedCourseId");
-
-                    b.HasIndex("UpdatedAt");
-
-                    b.ToTable("Conversations", (string)null);
-                });
-
-            modelBuilder.Entity("SeOne.Domain.Entities.ConversationParticipant", b =>
-                {
-                    b.Property<Guid>("ConversationId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTime>("JoinedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<DateTime?>("LastReadAt")
-                        .HasColumnType("datetime2");
-
-                    b.HasKey("ConversationId", "UserId");
-
-                    b.HasIndex("UserId");
-
-                    b.ToTable("ConversationParticipants", (string)null);
                 });
 
             modelBuilder.Entity("SeOne.Domain.Entities.Course", b =>
@@ -601,95 +430,6 @@ namespace SeOne.Infrastructure.Migrations
                     b.ToTable("LessonProgress", (string)null);
                 });
 
-            modelBuilder.Entity("SeOne.Domain.Entities.Message", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("Attachments")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("Content")
-                        .IsRequired()
-                        .HasMaxLength(5000)
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<Guid>("ConversationId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<Guid>("SenderId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("SenderId");
-
-                    b.HasIndex("ConversationId", "CreatedAt");
-
-                    b.ToTable("Messages", (string)null);
-                });
-
-            modelBuilder.Entity("SeOne.Domain.Entities.Notification", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("ActionLabel")
-                        .HasMaxLength(200)
-                        .HasColumnType("nvarchar(200)");
-
-                    b.Property<string>("ActionUrl")
-                        .HasMaxLength(1000)
-                        .HasColumnType("nvarchar(1000)");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("DataJson")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<DateTime?>("ExpiresAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<bool>("IsRead")
-                        .HasColumnType("bit");
-
-                    b.Property<string>("Message")
-                        .IsRequired()
-                        .HasMaxLength(2000)
-                        .HasColumnType("nvarchar(2000)");
-
-                    b.Property<DateTime?>("ReadAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("Title")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("nvarchar(200)");
-
-                    b.Property<int>("Type")
-                        .HasColumnType("int");
-
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("UserId", "CreatedAt");
-
-                    b.HasIndex("UserId", "IsRead");
-
-                    b.HasIndex("UserId", "Type");
-
-                    b.ToTable("Notifications", (string)null);
-                });
-
             modelBuilder.Entity("SeOne.Domain.Entities.OtpCode", b =>
                 {
                     b.Property<Guid>("Id")
@@ -732,133 +472,6 @@ namespace SeOne.Infrastructure.Migrations
                     b.HasIndex("PhoneNumber", "ExpiresAt");
 
                     b.ToTable("OtpCodes", (string)null);
-                });
-
-            modelBuilder.Entity("SeOne.Domain.Entities.Payment", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<decimal>("Amount")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("decimal(18,2)");
-
-                    b.Property<string>("ClientSecret")
-                        .IsRequired()
-                        .HasMaxLength(500)
-                        .HasColumnType("nvarchar(500)");
-
-                    b.Property<Guid>("CourseId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("Currency")
-                        .IsRequired()
-                        .HasMaxLength(3)
-                        .HasColumnType("nvarchar(3)");
-
-                    b.Property<string>("FailureReason")
-                        .HasMaxLength(1000)
-                        .HasColumnType("nvarchar(1000)");
-
-                    b.Property<DateTime?>("PaidAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("Provider")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("nvarchar(100)");
-
-                    b.Property<string>("ProviderPaymentId")
-                        .HasMaxLength(200)
-                        .HasColumnType("nvarchar(200)");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("int");
-
-                    b.Property<Guid>("StudentId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CourseId");
-
-                    b.HasIndex("ProviderPaymentId")
-                        .IsUnique()
-                        .HasFilter("[ProviderPaymentId] IS NOT NULL");
-
-                    b.HasIndex("StudentId", "CreatedAt");
-
-                    b.ToTable("Payments", (string)null);
-                });
-
-            modelBuilder.Entity("SeOne.Domain.Entities.Review", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("Content")
-                        .IsRequired()
-                        .HasMaxLength(2000)
-                        .HasColumnType("nvarchar(2000)");
-
-                    b.Property<Guid>("CourseId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<int>("Rating")
-                        .HasColumnType("int");
-
-                    b.Property<Guid>("StudentId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("Title")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("nvarchar(200)");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CourseId");
-
-                    b.HasIndex("StudentId", "CourseId")
-                        .IsUnique();
-
-                    b.ToTable("Reviews", (string)null);
-                });
-
-            modelBuilder.Entity("SeOne.Domain.Entities.ReviewHelpful", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<Guid>("ReviewId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("UserId");
-
-                    b.HasIndex("ReviewId", "UserId")
-                        .IsUnique();
-
-                    b.ToTable("ReviewHelpful", (string)null);
                 });
 
             modelBuilder.Entity("SeOne.Domain.Entities.TeacherAvailability", b =>
@@ -1092,58 +705,6 @@ namespace SeOne.Infrastructure.Migrations
                         .IsRequired();
                 });
 
-            modelBuilder.Entity("SeOne.Domain.Entities.Assignment", b =>
-                {
-                    b.HasOne("SeOne.Domain.Entities.Course", "Course")
-                        .WithMany()
-                        .HasForeignKey("CourseId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("SeOne.Domain.Entities.CourseModule", "CourseModule")
-                        .WithMany()
-                        .HasForeignKey("CourseModuleId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("SeOne.Domain.Entities.User", "Teacher")
-                        .WithMany()
-                        .HasForeignKey("TeacherId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Course");
-
-                    b.Navigation("CourseModule");
-
-                    b.Navigation("Teacher");
-                });
-
-            modelBuilder.Entity("SeOne.Domain.Entities.AssignmentSubmission", b =>
-                {
-                    b.HasOne("SeOne.Domain.Entities.Assignment", "Assignment")
-                        .WithMany("Submissions")
-                        .HasForeignKey("AssignmentId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("SeOne.Domain.Entities.User", "GradedBy")
-                        .WithMany()
-                        .HasForeignKey("GradedById")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("SeOne.Domain.Entities.User", "Student")
-                        .WithMany()
-                        .HasForeignKey("StudentId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Assignment");
-
-                    b.Navigation("GradedBy");
-
-                    b.Navigation("Student");
-                });
-
             modelBuilder.Entity("SeOne.Domain.Entities.Booking", b =>
                 {
                     b.HasOne("SeOne.Domain.Entities.User", "Student")
@@ -1161,42 +722,6 @@ namespace SeOne.Infrastructure.Migrations
                     b.Navigation("Student");
 
                     b.Navigation("Teacher");
-                });
-
-            modelBuilder.Entity("SeOne.Domain.Entities.Conversation", b =>
-                {
-                    b.HasOne("SeOne.Domain.Entities.Assignment", "RelatedAssignment")
-                        .WithMany()
-                        .HasForeignKey("RelatedAssignmentId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("SeOne.Domain.Entities.Course", "RelatedCourse")
-                        .WithMany()
-                        .HasForeignKey("RelatedCourseId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
-                    b.Navigation("RelatedAssignment");
-
-                    b.Navigation("RelatedCourse");
-                });
-
-            modelBuilder.Entity("SeOne.Domain.Entities.ConversationParticipant", b =>
-                {
-                    b.HasOne("SeOne.Domain.Entities.Conversation", "Conversation")
-                        .WithMany("Participants")
-                        .HasForeignKey("ConversationId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("SeOne.Domain.Entities.User", "User")
-                        .WithMany()
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Conversation");
-
-                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("SeOne.Domain.Entities.Course", b =>
@@ -1270,93 +795,6 @@ namespace SeOne.Infrastructure.Migrations
                     b.Navigation("Student");
                 });
 
-            modelBuilder.Entity("SeOne.Domain.Entities.Message", b =>
-                {
-                    b.HasOne("SeOne.Domain.Entities.Conversation", "Conversation")
-                        .WithMany("Messages")
-                        .HasForeignKey("ConversationId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("SeOne.Domain.Entities.User", "Sender")
-                        .WithMany()
-                        .HasForeignKey("SenderId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Conversation");
-
-                    b.Navigation("Sender");
-                });
-
-            modelBuilder.Entity("SeOne.Domain.Entities.Notification", b =>
-                {
-                    b.HasOne("SeOne.Domain.Entities.User", "User")
-                        .WithMany()
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("User");
-                });
-
-            modelBuilder.Entity("SeOne.Domain.Entities.Payment", b =>
-                {
-                    b.HasOne("SeOne.Domain.Entities.Course", "Course")
-                        .WithMany()
-                        .HasForeignKey("CourseId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("SeOne.Domain.Entities.User", "Student")
-                        .WithMany()
-                        .HasForeignKey("StudentId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Course");
-
-                    b.Navigation("Student");
-                });
-
-            modelBuilder.Entity("SeOne.Domain.Entities.Review", b =>
-                {
-                    b.HasOne("SeOne.Domain.Entities.Course", "Course")
-                        .WithMany()
-                        .HasForeignKey("CourseId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("SeOne.Domain.Entities.User", "Student")
-                        .WithMany()
-                        .HasForeignKey("StudentId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Course");
-
-                    b.Navigation("Student");
-                });
-
-            modelBuilder.Entity("SeOne.Domain.Entities.ReviewHelpful", b =>
-                {
-                    b.HasOne("SeOne.Domain.Entities.Review", "Review")
-                        .WithMany("HelpfulMarks")
-                        .HasForeignKey("ReviewId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("SeOne.Domain.Entities.User", "User")
-                        .WithMany()
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Review");
-
-                    b.Navigation("User");
-                });
-
             modelBuilder.Entity("SeOne.Domain.Entities.TeacherAvailability", b =>
                 {
                     b.HasOne("SeOne.Domain.Entities.User", "Teacher")
@@ -1396,23 +834,6 @@ namespace SeOne.Infrastructure.Migrations
                     b.Navigation("Course");
 
                     b.Navigation("Student");
-                });
-
-            modelBuilder.Entity("SeOne.Domain.Entities.Assignment", b =>
-                {
-                    b.Navigation("Submissions");
-                });
-
-            modelBuilder.Entity("SeOne.Domain.Entities.Conversation", b =>
-                {
-                    b.Navigation("Messages");
-
-                    b.Navigation("Participants");
-                });
-
-            modelBuilder.Entity("SeOne.Domain.Entities.Review", b =>
-                {
-                    b.Navigation("HelpfulMarks");
                 });
 #pragma warning restore 612, 618
         }

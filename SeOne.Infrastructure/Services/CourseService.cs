@@ -1,6 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using SeOne.Application.DTOs;
 using SeOne.Application.Interfaces;
+using SeOne.Domain.Entities;
 using SeOne.Infrastructure.Persistence;
 
 namespace SeOne.Infrastructure.Services;
@@ -109,6 +110,10 @@ public class CourseService : ICourseService
             // delete enrollments for the course
             await _context.Set<Domain.Entities.Enrollment>()
                 .Where(e => e.CourseId == courseId)
+                .ExecuteDeleteAsync();
+
+            await _context.Set<Conversation>()
+                .Where(x => x.RelatedCourseId == courseId)
                 .ExecuteDeleteAsync();
 
             // finally delete the course

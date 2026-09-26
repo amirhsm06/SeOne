@@ -24,6 +24,8 @@ public class EnrollmentService : IEnrollmentService
 
         if (!course.IsPublished)
             return null;
+        if (course.Price > 0)
+            return null;
 
         var already = await _context.Set<Enrollment>().AnyAsync(e => e.CourseId == courseId && e.StudentId == studentId);
 
