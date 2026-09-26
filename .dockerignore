@@ -1,0 +1,13 @@
+.git
+.gitignore
+.vs
+**/bin
+**/obj
+**/Debug
+**/Release
+node_modules
+*.user
+*.suo
+*.bak
+.env
+.env.*

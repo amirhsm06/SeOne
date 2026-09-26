@@ -1,0 +1,30 @@
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+
+WORKDIR /src
+
+COPY ["SeOne.Api/SeOne.Api.csproj", "SeOne.Api/"]
+COPY ["SeOne.Application/SeOne.Application.csproj", "SeOne.Application/"]
+COPY ["SeOne.Domain/SeOne.Domain.csproj", "SeOne.Domain/"]
+COPY ["SeOne.Infrastructure/SeOne.Infrastructure.csproj", "SeOne.Infrastructure/"]
+COPY ["SeOne.Migrations.Postgres/SeOne.Migrations.Postgres.csproj", "SeOne.Migrations.Postgres/"]
+
+RUN dotnet restore "SeOne.Api/SeOne.Api.csproj"
+
+COPY . .
+
+RUN dotnet publish "SeOne.Api/SeOne.Api.csproj" \
+    -c Release \
+    -o /app/publish \
+    --no-restore \
+    /p:UseAppHost=false
+
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
+
+WORKDIR /app
+
+COPY --from=build /app/publish .
+
+EXPOSE 80
+
+CMD ["sh", "-c", "dotnet SeOne.Api.dll --urls http://0.0.0.0:${PORT:-80}"]
