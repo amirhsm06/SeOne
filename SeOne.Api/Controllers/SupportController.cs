@@ -103,7 +103,7 @@ public class SupportController : ApiControllerBase
     [HttpPost("support/tickets/{ticketId:guid}/messages/{messageId:guid}/upload")]
     [Authorize]
     [RequestSizeLimit(10_000_000)]
-    public async Task<IActionResult> Upload(Guid ticketId, Guid messageId, [FromForm] IFormFile? attachment)
+    public async Task<IActionResult> Upload(Guid ticketId, Guid messageId, IFormFile? attachment)
     {
         var ticket = await _db.SupportTickets.FirstOrDefaultAsync(t => t.Id == ticketId); if (ticket is null) return NotFound();
         var support = IsSupportUser(); if (!support && ticket.UserId != RequireUserId()) return Forbid();

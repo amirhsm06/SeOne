@@ -29,7 +29,13 @@ public class UserSettingsController : ApiControllerBase
     public async Task<IActionResult> UpdateProfile([FromBody] UpdateProfileRequest request)
     {
         var user = await CurrentUserAsync(); if (user is null) return NotFound();
-        if (request.FullName is not null) user.FullName = request.FullName.Trim();
+        if (request.FirstName is not null)
+            user.FirstName = request.FirstName.Trim();
+
+        if (request.FamilyName is not null)
+            user.FamilyName = request.FamilyName.Trim();
+
+        user.FullName = $"{user.FirstName} {user.FamilyName}".Trim();
         if (request.Bio is not null) user.Bio = request.Bio;
         if (request.DateOfBirth is not null && DateTime.TryParse(request.DateOfBirth, out var dob)) user.DateOfBirth = dob.Date;
         if (request.PhoneNumber is not null) user.PhoneNumber = request.PhoneNumber;
@@ -43,7 +49,7 @@ public class UserSettingsController : ApiControllerBase
 
     [HttpPost("profile/avatar")]
     [RequestSizeLimit(5_000_000)]
-    public async Task<IActionResult> UploadAvatar([FromForm] IFormFile? avatar)
+    public async Task<IActionResult> UploadAvatar(IFormFile? avatar)
     {
         var user = await CurrentUserAsync(); if (user is null) return NotFound();
         if (avatar is null || avatar.Length == 0) return BadRequest(new { message = "Avatar file is required." });
@@ -183,7 +189,10 @@ public class UserSettingsController : ApiControllerBase
     }
 
     private async Task<User?> CurrentUserAsync() => await _users.FindByIdAsync(RequireUserId().ToString());
-    private async Task<IActionResult> FindUserResponse() { var u = await CurrentUserAsync(); if (u is null) return NotFound(); return Ok(new { id = u.Id, fullName = u.FullName, email = u.Email, avatarUrl = u.AvatarUrl, bio = u.Bio, dateOfBirth = u.DateOfBirth, phoneNumber = u.PhoneNumber, country = u.Country, language = u.Language, timezone = u.Timezone, createdAt = u.CreatedAt, updatedAt = u.UpdatedAt }); }
+    private async Task<IActionResult> FindUserResponse() { var u = await CurrentUserAsync(); if (u is null) return NotFound(); return Ok(new { id = u.Id,
+        firstName = u.FirstName,
+        familyName = u.FamilyName,
+        fullName = u.FullName, email = u.Email, avatarUrl = u.AvatarUrl, bio = u.Bio, dateOfBirth = u.DateOfBirth, phoneNumber = u.PhoneNumber, country = u.Country, language = u.Language, timezone = u.Timezone, createdAt = u.CreatedAt, updatedAt = u.UpdatedAt }); }
     private static string[] ReadBackupCodes(User user) => ReadTwoFactorData(user).Codes;
     private static TwoFactorData ReadTwoFactorData(User user)
     {
@@ -235,7 +244,24 @@ public class UserSettingsController : ApiControllerBase
     private sealed class TwoFactorData { public string? Secret { get; set; } public string[] Codes { get; set; } = Array.Empty<string>(); }
 }
 
-public sealed class UpdateProfileRequest { public string? FullName { get; set; } public string? Bio { get; set; } public string? DateOfBirth { get; set; } public string? PhoneNumber { get; set; } public string? Country { get; set; } public string? Language { get; set; } public string? Timezone { get; set; } }
+public sealed class UpdateProfileRequest
+{
+    public string? FirstName { get; set; }
+
+    public string? FamilyName { get; set; }
+
+    public string? Bio { get; set; }
+
+    public string? DateOfBirth { get; set; }
+
+    public string? PhoneNumber { get; set; }
+
+    public string? Country { get; set; }
+
+    public string? Language { get; set; }
+
+    public string? Timezone { get; set; }
+}
 public sealed class ChangePasswordRequest { public string CurrentPassword { get; set; } = string.Empty; public string NewPassword { get; set; } = string.Empty; public string ConfirmPassword { get; set; } = string.Empty; }
 public sealed class EnableTwoFactorRequest { public string Method { get; set; } = "app"; }
 public sealed class VerifyTwoFactorRequest { public string Code { get; set; } = string.Empty; }

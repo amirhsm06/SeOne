@@ -30,7 +30,8 @@ public class AuthController : ControllerBase
         try
         {
             var result = await _authService.RegisterAsync(
-                request.FullName,
+                request.FirstName,
+                request.FamilyName,
                 request.Email,
                 request.Password,
                 request.Role);
@@ -90,7 +91,8 @@ public class AuthController : ControllerBase
         return Ok(new UserDto
         {
             Id = user.Id,
-            FullName = user.FullName,
+            FirstName = user.FirstName,
+            FamilyName = user.FamilyName,
             Email = user.Email ?? string.Empty,
             Role = user.Role.ToString()
         });
@@ -157,7 +159,9 @@ public class AuthController : ControllerBase
 
 public class RegisterRequest
 {
-    public string FullName { get; set; } = string.Empty;
+    public string FirstName { get; set; } = string.Empty;
+
+    public string FamilyName { get; set; } = string.Empty;
 
     public string Email { get; set; } = string.Empty;
 

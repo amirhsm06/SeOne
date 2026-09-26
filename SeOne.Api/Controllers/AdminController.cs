@@ -63,13 +63,33 @@ public class AdminController : ApiControllerBase
     [HttpGet("teachers/{id:guid}")]
     public async Task<IActionResult> Teacher(Guid id){var u=await _db.Users.AsNoTracking().FirstOrDefaultAsync(u=>u.Id==id&&u.Role==UserRole.Teacher);if(u is null)return NotFound();var p=await _db.Set<TeacherProfile>().AsNoTracking().FirstOrDefaultAsync(p=>p.TeacherId==id);return Ok(MapTeacher(u,p));}
     [HttpPost("teachers")]
-    public async Task<IActionResult> CreateTeacher([FromBody] JsonElement body){var r=ReadCreateUser(body);var result=await CreateUser(new AdminCreateUserRequest{FullName=r.fullName,Email=r.email,Password=r.password,SendWelcomeEmail=r.sendWelcome},UserRole.Teacher,"pending");if(result is ObjectResult o && o.Value is JsonElement){}return result;}
+    public async Task<IActionResult> CreateTeacher([FromBody] JsonElement body)
+    {
+        var r = ReadCreateUser(body);
+
+        var result = await CreateUser(
+            new AdminCreateUserRequest
+            {
+                FirstName = r.firstName,
+                FamilyName = r.familyName,
+                Email = r.email,
+                Password = r.password,
+                SendWelcomeEmail = r.sendWelcome
+            },
+            UserRole.Teacher,
+            "pending");
+
+        return result;
+    }
     [HttpPatch("teachers/{id:guid}")]
     public async Task<IActionResult> UpdateTeacher(Guid id,[FromBody] JsonElement body)
     {
         var u = await _users.FindByIdAsync(id.ToString());
         if (u is null || u.Role != UserRole.Teacher) return NotFound();
-        SetIfString(body, "fullName", v => u.FullName = v);
+        SetIfString(body, "firstName", v => u.FirstName = v.Trim());
+        SetIfString(body, "familyName", v => u.FamilyName = v.Trim());
+
+        u.FullName = $"{u.FirstName} {u.FamilyName}".Trim();
         SetIfString(body, "avatarUrl", v => u.AvatarUrl = v);
         SetIfString(body, "bio", v => u.Bio = v);
         var profile = await _db.Set<TeacherProfile>().FirstOrDefaultAsync(p => p.TeacherId == id);
@@ -142,13 +162,142 @@ public class AdminController : ApiControllerBase
     [HttpPatch("settings")]
     public async Task<IActionResult> UpdateSettings([FromBody] JsonElement body){var settings=await ReadSettingEntities();foreach(var (key,value) in new[]{("siteName",GetString(body,"siteName")),("supportEmail",GetString(body,"supportEmail")),("defaultLocale",GetString(body,"defaultLocale")),("maintenanceMode",GetBool(body,"maintenanceMode").ToString()),("allowRegistration",GetBool(body,"allowRegistration").ToString())}){if(value is null)continue;var e=settings.FirstOrDefault(s=>s.Key==key);if(e is null){e=new SiteSetting{Id=Guid.NewGuid(),Key=key};_db.Add(e);}e.Value=value;e.UpdatedAt=DateTime.UtcNow;}await _db.SaveChangesAsync();return Ok(await ReadSettings());}
 
-    private async Task<IActionResult> CreateUser(AdminCreateUserRequest r,UserRole role,string status){if(string.IsNullOrWhiteSpace(r.Email)||string.IsNullOrWhiteSpace(r.Password)||string.IsNullOrWhiteSpace(r.FullName))return BadRequest(new{message="Full name, email and password are required."});var exists=await _users.FindByEmailAsync(r.Email);if(exists is not null)return Conflict(new{message="Email is already in use."});var u=new User{Id=Guid.NewGuid(),UserName=r.Email,Email=r.Email,EmailConfirmed=true,FullName=r.FullName,Role=role,AccountStatus=status,CreatedAt=DateTime.UtcNow,UpdatedAt=DateTime.UtcNow};var res=await _users.CreateAsync(u,r.Password);if(!res.Succeeded)return BadRequest(new{message=string.Join(" ",res.Errors.Select(e=>e.Description))});if(role==UserRole.Teacher)_db.Add(new TeacherProfile{Id=Guid.NewGuid(),TeacherId=u.Id,Rating=0});await _db.SaveChangesAsync();return Ok(role==UserRole.Student?MapStudent(u,await _db.Set<Enrollment>().CountAsync(e=>e.StudentId==u.Id)):MapTeacher(u,await _db.Set<TeacherProfile>().FirstOrDefaultAsync(p=>p.TeacherId==u.Id)));}
+    private async Task<IActionResult> CreateUser(
+     AdminCreateUserRequest r,
+     UserRole role,
+     string status)
+    {
+        if (string.IsNullOrWhiteSpace(r.FirstName) ||
+            string.IsNullOrWhiteSpace(r.FamilyName) ||
+            string.IsNullOrWhiteSpace(r.Email) ||
+            string.IsNullOrWhiteSpace(r.Password))
+        {
+            return BadRequest(new
+            {
+                message = "First name, family name, email and password are required."
+            });
+        }
+
+        var exists = await _users.FindByEmailAsync(r.Email);
+
+        if (exists is not null)
+        {
+            return Conflict(new
+            {
+                message = "Email is already in use."
+            });
+        }
+
+        var firstName = r.FirstName.Trim();
+        var familyName = r.FamilyName.Trim();
+
+        var user = new User
+        {
+            Id = Guid.NewGuid(),
+            UserName = r.Email.Trim(),
+            Email = r.Email.Trim(),
+            EmailConfirmed = true,
+            FirstName = firstName,
+            FamilyName = familyName,
+            FullName = $"{firstName} {familyName}",
+            Role = role,
+            AccountStatus = status,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+
+        var result = await _users.CreateAsync(user, r.Password);
+
+        if (!result.Succeeded)
+        {
+            return BadRequest(new
+            {
+                message = string.Join(" ", result.Errors.Select(e => e.Description))
+            });
+        }
+
+        if (role == UserRole.Teacher)
+        {
+            _db.Add(new TeacherProfile
+            {
+                Id = Guid.NewGuid(),
+                TeacherId = user.Id,
+                Rating = 0
+            });
+        }
+
+        await _db.SaveChangesAsync();
+
+        return Ok(
+            role == UserRole.Student
+                ? MapStudent(
+                    user,
+                    await _db.Set<Enrollment>()
+                        .CountAsync(e => e.StudentId == user.Id))
+                : MapTeacher(
+                    user,
+                    await _db.Set<TeacherProfile>()
+                        .FirstOrDefaultAsync(p => p.TeacherId == user.Id)));
+    }
     private async Task<object> PagedUsers(IQueryable<User> q,int page,int pageSize,bool teacher){page=Math.Max(1,page);pageSize=Math.Clamp(pageSize,1,100);var total=await q.CountAsync();var users=await q.OrderByDescending(u=>u.CreatedAt).Skip((page-1)*pageSize).Take(pageSize).ToListAsync();var ids=users.Select(u=>u.Id).ToList();var counts=await _db.Set<Enrollment>().Where(e=>ids.Contains(e.StudentId)).GroupBy(e=>e.StudentId).Select(g=>new{g.Key,count=g.Count()}).ToListAsync();return new{items=users.Select(u=>MapStudent(u,counts.FirstOrDefault(x=>x.Key==u.Id)?.count??0)),page,pageSize,totalCount=total,totalPages=(int)Math.Ceiling(total/(double)pageSize)};}
     private async Task<object> PagedTeachers(IQueryable<User> q,int page,int pageSize){page=Math.Max(1,page);pageSize=Math.Clamp(pageSize,1,100);var total=await q.CountAsync();var users=await q.OrderByDescending(u=>u.CreatedAt).Skip((page-1)*pageSize).Take(pageSize).ToListAsync();var ids=users.Select(u=>u.Id).ToList();var profiles=await _db.Set<TeacherProfile>().Where(p=>ids.Contains(p.TeacherId)).ToDictionaryAsync(p=>p.TeacherId);return new{items=users.Select(u=>MapTeacher(u,profiles.GetValueOrDefault(u.Id))),page,pageSize,totalCount=total,totalPages=(int)Math.Ceiling(total/(double)pageSize)};}
     private async Task<IActionResult> GetUser(Guid id,UserRole role){var u=await _db.Users.AsNoTracking().FirstOrDefaultAsync(u=>u.Id==id&&u.Role==role);if(u is null)return NotFound();return Ok(MapStudent(u,await _db.Set<Enrollment>().CountAsync(e=>e.StudentId==id)));}
     private async Task<IActionResult> SetStatus(Guid id,UserRole role,string[] allowed,string status){status=status?.Trim().ToLowerInvariant()??"";if(!allowed.Contains(status))return BadRequest(new{message="Invalid status."});var u=await _db.Users.FirstOrDefaultAsync(u=>u.Id==id&&u.Role==role);if(u is null)return NotFound();u.AccountStatus=status;u.UpdatedAt=DateTime.UtcNow;await _users.UpdateAsync(u);return Ok(role==UserRole.Student?MapStudent(u,await _db.Set<Enrollment>().CountAsync(e=>e.StudentId==id)):MapTeacher(u,await _db.Set<TeacherProfile>().FirstOrDefaultAsync(p=>p.TeacherId==id)));}
     private async Task<IActionResult> SoftDelete(Guid id,UserRole role){var u=await _db.Users.FirstOrDefaultAsync(u=>u.Id==id&&u.Role==role);if(u is null)return NotFound();u.AccountStatus="deleted";u.UpdatedAt=DateTime.UtcNow;await _users.UpdateAsync(u);return NoContent();}
-    private async Task<IActionResult> UpdateUser(Guid id,UserRole role,JsonElement b){var u=await _users.FindByIdAsync(id.ToString());if(u is null||u.Role!=role)return NotFound();SetIfString(b,"fullName",v=>u.FullName=v);SetIfString(b,"avatarUrl",v=>u.AvatarUrl=v);if(b.TryGetProperty("email",out var e)&&e.ValueKind==System.Text.Json.JsonValueKind.String){var email=e.GetString();if(!string.IsNullOrWhiteSpace(email)&&email!=u.Email){var token=await _users.GenerateChangeEmailTokenAsync(u,email);await _users.ChangeEmailAsync(u,email,token);}}u.UpdatedAt=DateTime.UtcNow;await _users.UpdateAsync(u);return Ok(MapStudent(u,await _db.Set<Enrollment>().CountAsync(x=>x.StudentId==id)));}
+    private async Task<IActionResult> UpdateUser(
+    Guid id,
+    UserRole role,
+    JsonElement body)
+    {
+        var user = await _users.FindByIdAsync(id.ToString());
+
+        if (user is null || user.Role != role)
+            return NotFound();
+
+        SetIfString(body, "firstName", value => user.FirstName = value.Trim());
+        SetIfString(body, "familyName", value => user.FamilyName = value.Trim());
+
+        user.FullName = $"{user.FirstName} {user.FamilyName}".Trim();
+
+        SetIfString(body, "avatarUrl", value => user.AvatarUrl = value);
+
+        if (body.TryGetProperty("email", out var emailElement) &&
+            emailElement.ValueKind == JsonValueKind.String)
+        {
+            var email = emailElement.GetString();
+
+            if (!string.IsNullOrWhiteSpace(email) &&
+                !string.Equals(user.Email, email, StringComparison.OrdinalIgnoreCase))
+            {
+                var token = await _users.GenerateChangeEmailTokenAsync(user, email);
+
+                var emailResult = await _users.ChangeEmailAsync(
+                    user,
+                    email,
+                    token);
+
+                if (!emailResult.Succeeded)
+                {
+                    return BadRequest(new
+                    {
+                        message = string.Join(
+                            " ",
+                            emailResult.Errors.Select(e => e.Description))
+                    });
+                }
+            }
+        }
+
+        user.UpdatedAt = DateTime.UtcNow;
+
+        await _users.UpdateAsync(user);
+
+        return Ok(
+            MapStudent(
+                user,
+                await _db.Set<Enrollment>()
+                    .CountAsync(x => x.StudentId == id)));
+    }
     private async Task<IActionResult> EnrollStudent(Guid studentId,Guid courseId){if(!await _db.Users.AnyAsync(u=>u.Id==studentId&&u.Role==UserRole.Student))return NotFound();var course=await _db.Set<Course>().FindAsync(courseId);if(course is null)return NotFound();if(await _db.Set<Enrollment>().AnyAsync(e=>e.StudentId==studentId&&e.CourseId==courseId))return Conflict(new{message="Already enrolled."});var e=new Enrollment{Id=Guid.NewGuid(),StudentId=studentId,CourseId=courseId,EnrolledAt=DateTime.UtcNow};_db.Add(e);await _db.SaveChangesAsync();return Ok(new{enrollment=new{id=e.Id,courseId=e.CourseId,userId=e.StudentId,enrolledAt=e.EnrolledAt,status="active",progress=0}});}
     private async Task<IActionResult> GetStudentEnrollments(Guid id){var list=await _db.Set<Enrollment>().AsNoTracking().Where(e=>e.StudentId==id).Include(e=>e.Course).OrderByDescending(e=>e.EnrolledAt).ToListAsync();return Ok(await Task.WhenAll(list.Select(async e=>new{id=e.Id,courseId=e.CourseId,userId=e.StudentId,enrolledAt=e.EnrolledAt,status="active",progress=(await ProgressForUserCourse(e.StudentId,e.CourseId)).progress})));}
     private async Task<IActionResult> GetStudentProgress(Guid id){var ids=await _db.Set<Enrollment>().Where(e=>e.StudentId==id).Select(e=>e.CourseId).ToListAsync();var list=new List<object>();foreach(var courseId in ids){var c=await _db.Set<Course>().FindAsync(courseId);var p=await ProgressForUserCourse(id,courseId);list.Add(new{courseId,courseTitle=c?.Title??string.Empty,progress=p.progress,completedLessons=p.completed,totalLessons=p.total,lastActivityAt=p.last.ToString("O")});}return Ok(list);}
@@ -167,10 +316,36 @@ public class AdminController : ApiControllerBase
     private static void SetIfBool(JsonElement b,string name,Action<bool> setter){if(b.TryGetProperty(name,out var p)&&(p.ValueKind==System.Text.Json.JsonValueKind.True||p.ValueKind==System.Text.Json.JsonValueKind.False))setter(p.GetBoolean());}
     private static void ApplyBlog(BlogPost b,JsonElement body){SetIfString(body,"title",v=>b.Title=v);SetIfString(body,"excerpt",v=>b.Excerpt=v);SetIfString(body,"content",v=>b.Content=v);SetIfString(body,"body",v=>b.Content=v);SetIfString(body,"author",v=>b.Author=v);SetIfString(body,"category",v=>b.Category=v);SetIfString(body,"imageUrl",v=>b.ImageUrl=v);SetIfString(body,"lang",v=>b.Language=v);SetIfString(body,"language",v=>b.Language=v);SetIfString(body,"readTime",v=>b.ReadTime=v);if(body.TryGetProperty("isPublished",out var p)&&(p.ValueKind==System.Text.Json.JsonValueKind.True||p.ValueKind==System.Text.Json.JsonValueKind.False))b.IsPublished=p.GetBoolean();}
     private async Task SetTeacherProfileField(Guid teacherId,Action<TeacherProfile> setter){var p=await _db.Set<TeacherProfile>().FirstOrDefaultAsync(p=>p.TeacherId==teacherId);if(p is null){p=new TeacherProfile{Id=Guid.NewGuid(),TeacherId=teacherId};_db.Add(p);}setter(p);}
-    private static (string fullName,string email,string password,bool sendWelcome) ReadCreateUser(JsonElement body)=>(GetString(body,"fullName")??"",GetString(body,"email")??"",GetString(body,"password")??"",GetBool(body,"sendWelcomeEmail"));
+    private static (
+    string firstName,
+    string familyName,
+    string email,
+    string password,
+    bool sendWelcome
+) ReadCreateUser(JsonElement body)
+    {
+        return (
+            GetString(body, "firstName") ?? "",
+            GetString(body, "familyName") ?? "",
+            GetString(body, "email") ?? "",
+            GetString(body, "password") ?? "",
+            GetBool(body, "sendWelcomeEmail")
+        );
+    }
 }
 
-public sealed class AdminCreateUserRequest { public string FullName {get;set;}=""; public string Email {get;set;}=""; public string Password {get;set;}=""; public bool SendWelcomeEmail {get;set;} }
+public sealed class AdminCreateUserRequest
+{
+    public string FirstName { get; set; } = "";
+
+    public string FamilyName { get; set; } = "";
+
+    public string Email { get; set; } = "";
+
+    public string Password { get; set; } = "";
+
+    public bool SendWelcomeEmail { get; set; }
+}
 public sealed class StatusRequest { public string Status {get;set;}=""; }
 public sealed class AdminEnrollRequest { public Guid CourseId {get;set;} public bool WaivePayment {get;set;}=true; }
 public sealed class ModuleRequest { public string? Title {get;set;} public string? Description {get;set;} public int Order {get;set;} }

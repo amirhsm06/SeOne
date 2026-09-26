@@ -38,7 +38,8 @@ public class AuthService : IAuthService
     }
 
     public async Task<AuthResponseDto> RegisterAsync(
-        string fullName,
+        string firstName,
+        string familyName,
         string email,
         string password,
         string role)
@@ -49,8 +50,11 @@ public class AuthService : IAuthService
         if (userRole == UserRole.Admin)
             throw new ArgumentException("Admin accounts cannot be self-registered.");
 
-        if (string.IsNullOrWhiteSpace(fullName))
-            throw new ArgumentException("Full name is required.");
+        if (string.IsNullOrWhiteSpace(firstName))
+            throw new ArgumentException("First name is required.");
+
+        if (string.IsNullOrWhiteSpace(familyName))
+            throw new ArgumentException("Family name is required.");
 
         if (string.IsNullOrWhiteSpace(email))
             throw new ArgumentException("Email is required.");
@@ -67,12 +71,17 @@ public class AuthService : IAuthService
             throw new ArgumentException(
                 "A user with this email already exists.");
 
+        var normalizedFirstName = firstName.Trim();
+        var normalizedFamilyName = familyName.Trim();
+
         var user = new User
         {
             Id = Guid.NewGuid(),
             UserName = normalizedEmail,
             Email = normalizedEmail,
-            FullName = fullName.Trim(),
+            FirstName = normalizedFirstName,
+            FamilyName = normalizedFamilyName,
+            FullName = $"{normalizedFirstName} {normalizedFamilyName}",
             Role = userRole
         };
 
@@ -291,7 +300,8 @@ public class AuthService : IAuthService
             User = new UserDto
             {
                 Id = user.Id,
-                FullName = user.FullName,
+                FirstName = user.FirstName,
+                FamilyName = user.FamilyName,
                 Email = user.Email ?? string.Empty,
                 Role = user.Role.ToString()
             }

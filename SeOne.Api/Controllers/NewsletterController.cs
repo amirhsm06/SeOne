@@ -65,7 +65,7 @@ public class NewsletterController : ApiControllerBase
     [HttpPost("newsletter/subscribers/import")]
     [Authorize(Roles = "Admin")]
     [RequestSizeLimit(10_000_000)]
-    public async Task<IActionResult> Import([FromForm] IFormFile? file)
+    public async Task<IActionResult> Import(IFormFile? file)
     {
         if(file is null||file.Length==0)return BadRequest(new{message="CSV file is required."});
         var imported=0;var failed=0;var errors=new List<string>();

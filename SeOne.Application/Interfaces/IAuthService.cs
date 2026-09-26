@@ -5,10 +5,11 @@ namespace SeOne.Application.Interfaces;
 public interface IAuthService
 {
     Task<AuthResponseDto> RegisterAsync(
-        string fullName,
-        string email,
-        string password,
-        string role);
+    string firstName,
+    string familyName,
+    string email,
+    string password,
+    string role);
 
     Task<AuthResponseDto?> LoginAsync(
         string email,
