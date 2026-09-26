@@ -22,6 +22,18 @@ public class LessonConfiguration : IEntityTypeConfiguration<Lesson>
             .IsRequired()
             .HasMaxLength(20000);
 
+        builder.Property(l => l.Description)
+            .HasMaxLength(2000);
+
+        builder.Property(l => l.VideoUrl)
+            .HasMaxLength(500);
+
+        builder.Property(l => l.AudioUrl)
+            .HasMaxLength(500);
+
+        builder.Property(l => l.Duration)
+            .IsRequired(false);
+
         builder.Property(l => l.Order).IsRequired();
 
         builder.Property(l => l.CreatedAt).IsRequired();

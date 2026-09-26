@@ -44,8 +44,13 @@ public class CourseService : ICourseService
             Description = course.Description,
             Level = course.Level,
             Price = course.Price,
+            Currency = course.Currency,
+            DiscountPercent = course.DiscountPercent,
             Duration = course.Duration,
             ImageUrl = course.ImageUrl,
+            Category = course.Category,
+            Language = course.Language,
+            IsFeatured = course.IsFeatured,
             IsPublished = course.IsPublished,
             CreatedAt = course.CreatedAt,
             TeacherId = course.TeacherId,
@@ -65,7 +70,7 @@ public class CourseService : ICourseService
             return false;
 
         // Perform dependent deletes in a transaction to avoid leaving orphaned records.
-        // Deletion order: LessonProgress -> Lessons -> CourseModules -> Enrollments -> Course
+        // Deletion order: LessonProgress -> Lessons -> CourseModules -> Practice -> Enrollments -> Course
         // Use ExecuteDeleteAsync where possible to perform server-side deletes without loading entities.
         using var tx = await _context.Database.BeginTransactionAsync();
         try
@@ -88,6 +93,11 @@ public class CourseService : ICourseService
 
             if (lessonIds.Count > 0)
             {
+                // delete learning sessions first because LearningSession -> Lesson is restrictive.
+                await _context.Set<Domain.Entities.LearningSession>()
+                    .Where(s => lessonIds.Contains(s.LessonId))
+                    .ExecuteDeleteAsync();
+
                 // delete lesson progress for these lessons
                 await _context.Set<Domain.Entities.LessonProgress>()
                     .Where(p => lessonIds.Contains(p.LessonId))
@@ -104,6 +114,32 @@ public class CourseService : ICourseService
                 // delete modules
                 await _context.Set<Domain.Entities.CourseModule>()
                     .Where(m => moduleIds.Contains(m.Id))
+                    .ExecuteDeleteAsync();
+            }
+
+            // delete practice data for the course before deleting the course.
+            // Practice uses restrictive foreign keys to avoid SQL Server cascade-path issues.
+            var practiceIds = await _context.Set<Domain.Entities.Practice>()
+                .Where(x => x.CourseId == courseId)
+                .Select(x => x.Id)
+                .ToListAsync();
+
+            if (practiceIds.Count > 0)
+            {
+                await _context.Set<Domain.Entities.PracticeAttemptAnswer>()
+                    .Where(x => practiceIds.Contains(x.Attempt.PracticeId))
+                    .ExecuteDeleteAsync();
+
+                await _context.Set<Domain.Entities.PracticeAttempt>()
+                    .Where(x => practiceIds.Contains(x.PracticeId))
+                    .ExecuteDeleteAsync();
+
+                await _context.Set<Domain.Entities.PracticeQuestion>()
+                    .Where(x => practiceIds.Contains(x.PracticeId))
+                    .ExecuteDeleteAsync();
+
+                await _context.Set<Domain.Entities.Practice>()
+                    .Where(x => practiceIds.Contains(x.Id))
                     .ExecuteDeleteAsync();
             }
 
@@ -158,8 +194,13 @@ public class CourseService : ICourseService
                 Description = x.Description,
                 Level = x.Level,
                 Price = x.Price,
+                Currency = x.Currency,
+                DiscountPercent = x.DiscountPercent,
                 Duration = x.Duration,
                 ImageUrl = x.ImageUrl,
+                Category = x.Category,
+                Language = x.Language,
+                IsFeatured = x.IsFeatured,
                 IsPublished = x.IsPublished,
                 CreatedAt = x.CreatedAt,
                 TeacherId = x.TeacherId,
@@ -201,8 +242,13 @@ public class CourseService : ICourseService
             Description = course.Description,
             Level = course.Level,
             Price = course.Price,
+            Currency = course.Currency,
+            DiscountPercent = course.DiscountPercent,
             Duration = course.Duration,
             ImageUrl = course.ImageUrl,
+            Category = course.Category,
+            Language = course.Language,
+            IsFeatured = course.IsFeatured,
             IsPublished = course.IsPublished,
             CreatedAt = course.CreatedAt,
             TeacherId = course.TeacherId,
@@ -257,8 +303,13 @@ public class CourseService : ICourseService
             Description = course.Description,
             Level = course.Level,
             Price = course.Price,
+            Currency = course.Currency,
+            DiscountPercent = course.DiscountPercent,
             Duration = course.Duration,
             ImageUrl = course.ImageUrl,
+            Category = course.Category,
+            Language = course.Language,
+            IsFeatured = course.IsFeatured,
             IsPublished = course.IsPublished,
             CreatedAt = course.CreatedAt,
             TeacherId = course.TeacherId,
@@ -279,9 +330,15 @@ public class CourseService : ICourseService
             Description = c.Description,
             LessonCount = _context.Set<Domain.Entities.Lesson>().Count(l => l.CourseModule.CourseId == c.Id),
             StudentCount = _context.Set<Domain.Entities.Enrollment>().Count(e => e.CourseId == c.Id),
-            Price = c.Price,
+            Price = c.DiscountPercent > 0 ? c.Price * (1m - c.DiscountPercent / 100m) : c.Price,
+            BasePrice = c.Price,
+            Currency = c.Currency,
+            DiscountPercent = c.DiscountPercent,
             Duration = c.Duration,
-            ImageUrl = c.ImageUrl
+            ImageUrl = c.ImageUrl,
+            Category = c.Category,
+            Language = c.Language,
+            IsFeatured = c.IsFeatured
         }).ToListAsync();
     }
 }

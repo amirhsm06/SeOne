@@ -28,8 +28,7 @@ public class NotificationConfiguration
             .IsRequired()
             .HasMaxLength(2000);
 
-        builder.Property(x => x.DataJson)
-            .HasColumnType("nvarchar(max)");
+        builder.Property(x => x.DataJson);
 
         builder.Property(x => x.IsRead)
             .IsRequired();

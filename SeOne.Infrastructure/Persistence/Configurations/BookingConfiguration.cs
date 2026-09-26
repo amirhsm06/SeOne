@@ -8,28 +8,30 @@ public class BookingConfiguration : IEntityTypeConfiguration<Booking>
 {
     public void Configure(EntityTypeBuilder<Booking> builder)
     {
-        builder.ToTable("Bookings");
+        builder.HasKey(x => x.Id);
 
-        builder.HasKey(b => b.Id);
+        builder.Property(x => x.Status).IsRequired();
+        builder.Property(x => x.CreatedAt).IsRequired();
+        builder.Property(x => x.StartTime).IsRequired();
+        builder.Property(x => x.EndTime).IsRequired();
 
-        builder.Property(b => b.StudentId).IsRequired();
-        builder.Property(b => b.TeacherId).IsRequired();
-        builder.Property(b => b.StartTime).IsRequired();
-        builder.Property(b => b.EndTime).IsRequired();
-        builder.Property(b => b.Status).IsRequired();
-        builder.Property(b => b.CreatedAt).IsRequired();
+        builder.HasIndex(x => new { x.TeacherId, x.StartTime });
+        builder.HasIndex(x => new { x.StudentId, x.StartTime });
+        builder.HasIndex(x => x.CourseId);
 
-        builder.HasIndex(b => new { b.TeacherId, b.StartTime });
-        builder.HasIndex(b => new { b.StudentId, b.StartTime });
-
-        builder.HasOne(b => b.Student)
+        builder.HasOne(x => x.Student)
             .WithMany()
-            .HasForeignKey(b => b.StudentId)
+            .HasForeignKey(x => x.StudentId)
             .OnDelete(DeleteBehavior.Restrict);
 
-        builder.HasOne(b => b.Teacher)
+        builder.HasOne(x => x.Teacher)
             .WithMany()
-            .HasForeignKey(b => b.TeacherId)
+            .HasForeignKey(x => x.TeacherId)
             .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasOne(x => x.Course)
+            .WithMany()
+            .HasForeignKey(x => x.CourseId)
+            .OnDelete(DeleteBehavior.SetNull);
     }
 }

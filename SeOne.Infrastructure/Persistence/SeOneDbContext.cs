@@ -40,6 +40,31 @@ public class SeOneDbContext
 
     public DbSet<Payment> Payments { get; set; }
 
+    public DbSet<Practice> Practices { get; set; }
+
+    public DbSet<PracticeQuestion> PracticeQuestions { get; set; }
+
+    public DbSet<PracticeAttempt> PracticeAttempts { get; set; }
+
+    public DbSet<PracticeAttemptAnswer> PracticeAttemptAnswers { get; set; }
+
+    public DbSet<LearningSession> LearningSessions { get; set; }
+
+    public DbSet<SupportTicket> SupportTickets { get; set; }
+
+    public DbSet<SupportMessage> SupportMessages { get; set; }
+
+    public DbSet<NewsletterSubscriber> NewsletterSubscribers { get; set; }
+
+    public DbSet<NewsletterCampaign> NewsletterCampaigns { get; set; }
+
+    public DbSet<SiteSetting> SiteSettings { get; set; }
+
+    public DbSet<Enrollment> Enrollments { get; set; }
+
+    public DbSet<Lesson> Lessons { get; set; }
+
+    public DbSet<LessonProgress> LessonProgress { get; set; }
     protected override void OnModelCreating(
         ModelBuilder modelBuilder)
     {

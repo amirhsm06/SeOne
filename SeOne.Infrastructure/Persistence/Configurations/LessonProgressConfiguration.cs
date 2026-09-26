@@ -20,6 +20,16 @@ public class LessonProgressConfiguration : IEntityTypeConfiguration<LessonProgre
 
         builder.Property(lp => lp.CompletedAt).IsRequired(false);
 
+        builder.Property(lp => lp.TimeSpent)
+            .IsRequired()
+            .HasDefaultValue(0);
+
+        builder.Property(lp => lp.LastPosition)
+            .IsRequired()
+            .HasDefaultValue(0);
+
+        builder.Property(lp => lp.LastAccessedAt).IsRequired(false);
+
         builder.HasIndex(lp => new { lp.StudentId, lp.LessonId }).IsUnique();
 
         builder.HasIndex(lp => lp.LessonId);

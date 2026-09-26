@@ -1,5 +1,3 @@
-using System;
-
 namespace SeOne.Domain.Entities;
 
 public class LessonProgress
@@ -13,6 +11,12 @@ public class LessonProgress
     public bool IsCompleted { get; set; }
 
     public DateTime? CompletedAt { get; set; }
+
+    public int TimeSpent { get; set; }
+
+    public int LastPosition { get; set; }
+
+    public DateTime? LastAccessedAt { get; set; }
 
     public User Student { get; set; } = null!;
 

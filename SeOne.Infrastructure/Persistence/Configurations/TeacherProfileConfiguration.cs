@@ -21,7 +21,7 @@ public class TeacherProfileConfiguration : IEntityTypeConfiguration<TeacherProfi
         builder.Property(t => t.Bio).HasMaxLength(2000);
 
         builder.Property(t => t.Rating)
-            .HasColumnType("decimal(3,2)")
+            .HasPrecision(3, 2)
             .HasDefaultValue(0m);
 
         builder.HasIndex(t => t.TeacherId).IsUnique();

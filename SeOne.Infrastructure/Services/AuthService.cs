@@ -46,6 +46,9 @@ public class AuthService : IAuthService
         if (!Enum.TryParse<UserRole>(role, true, out var userRole))
             throw new ArgumentException("Invalid role.");
 
+        if (userRole == UserRole.Admin)
+            throw new ArgumentException("Admin accounts cannot be self-registered.");
+
         if (string.IsNullOrWhiteSpace(fullName))
             throw new ArgumentException("Full name is required.");
 
@@ -103,6 +106,9 @@ public class AuthService : IAuthService
             email.Trim());
 
         if (user is null)
+            return null;
+
+        if (!string.Equals(user.AccountStatus, "active", StringComparison.OrdinalIgnoreCase))
             return null;
 
         var validPassword = await _userManager.CheckPasswordAsync(

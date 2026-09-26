@@ -57,8 +57,7 @@ public class PaymentConfiguration : IEntityTypeConfiguration<Payment>
         builder.HasIndex(x => x.CourseId);
 
         builder.HasIndex(x => x.ProviderPaymentId)
-            .IsUnique()
-            .HasFilter("[ProviderPaymentId] IS NOT NULL");
+            .IsUnique();
 
         builder.HasOne(x => x.Course)
             .WithMany()

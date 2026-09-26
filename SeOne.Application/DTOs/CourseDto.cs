@@ -12,9 +12,19 @@ public class CourseDto
 
     public decimal Price { get; set; }
 
+    public string Currency { get; set; } = "IRR";
+
+    public decimal DiscountPercent { get; set; }
+
     public string? Duration { get; set; }
 
     public string? ImageUrl { get; set; }
+
+    public string Category { get; set; } = string.Empty;
+
+    public string Language { get; set; } = "en";
+
+    public bool IsFeatured { get; set; }
 
     public bool IsPublished { get; set; }
 

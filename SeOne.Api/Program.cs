@@ -8,15 +8,21 @@ using System.Text;
 using SeOne.Infrastructure.Authentication;
 using SeOne.Application.Interfaces;
 using SeOne.Infrastructure.Services;
+using SeOne.Domain.Enums;
 
 
 var builder = WebApplication.CreateBuilder(args);
+var allowedOrigins =
+    builder.Configuration["AllowedOrigins"]?
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+    ?? ["http://localhost:3000"];
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("Frontend", policy =>
     {
         policy
-            .WithOrigins("http://localhost:3000")
+            .WithOrigins(allowedOrigins)
             .AllowAnyHeader()
             .AllowAnyMethod()
             .AllowCredentials();
@@ -48,8 +54,35 @@ builder.Services.AddSwaggerGen(options =>
         });
 });
 
+var databaseProvider = builder.Configuration["DatabaseProvider"]?.Trim().ToLowerInvariant() ?? "sqlserver";
+
+var postgresConnection =
+    Environment.GetEnvironmentVariable("SEONE_POSTGRES_CONNECTION")
+    ?? builder.Configuration.GetConnectionString("PostgresConnection");
+
 builder.Services.AddDbContext<SeOneDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+{
+    if (databaseProvider == "postgres")
+    {
+        if (string.IsNullOrWhiteSpace(postgresConnection))
+            throw new InvalidOperationException("PostgreSQL connection string is not configured.");
+
+        options.UseNpgsql(
+            postgresConnection,
+            npgsqlOptions => npgsqlOptions.MigrationsAssembly("SeOne.Migrations.Postgres"));
+    }
+    else if (databaseProvider == "sqlserver")
+    {
+        options.UseSqlServer(
+            builder.Configuration.GetConnectionString("DefaultConnection"),
+            sqlServerOptions => sqlServerOptions.MigrationsAssembly("SeOne.Infrastructure"));
+    }
+    else
+    {
+        throw new InvalidOperationException(
+            $"Unsupported database provider: {databaseProvider}");
+    }
+});
 
 builder.Services
     .AddIdentityCore<User>()
@@ -102,8 +135,11 @@ builder.Services.AddScoped<INotificationService,NotificationService>();
 builder.Services.AddScoped<IMessagingService,MessagingService>();
 builder.Services.AddScoped<IPaymentGateway, DevelopmentPaymentGateway>();
 builder.Services.AddScoped<IPaymentService, PaymentService>();
+builder.Services.AddScoped<IPracticeService, PracticeService>();
 
 var app = builder.Build();
+
+app.UseStaticFiles();
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
@@ -122,4 +158,37 @@ app.UseAuthorization();
 
 app.MapControllers();
 
+await SeedAdminAsync(app);
+
 app.Run();
+
+static async Task SeedAdminAsync(WebApplication app)
+{
+    var email = Environment.GetEnvironmentVariable("SEONE_ADMIN_EMAIL");
+    var password = Environment.GetEnvironmentVariable("SEONE_ADMIN_PASSWORD");
+    var fullName = Environment.GetEnvironmentVariable("SEONE_ADMIN_NAME") ?? "SE ONE Administrator";
+    if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password)) return;
+
+    using var scope = app.Services.CreateScope();
+    var userManager = scope.ServiceProvider.GetRequiredService<UserManager<User>>();
+    var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
+    if (!await roleManager.RoleExistsAsync("Admin"))
+        await roleManager.CreateAsync(new IdentityRole<Guid>("Admin"));
+
+    var admin = await userManager.FindByEmailAsync(email);
+    if (admin is null)
+    {
+        admin = new User { Id = Guid.NewGuid(), UserName = email, Email = email, EmailConfirmed = true, FullName = fullName, Role = UserRole.Admin, AccountStatus = "active", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        var result = await userManager.CreateAsync(admin, password);
+        if (!result.Succeeded) throw new InvalidOperationException(string.Join(" ", result.Errors.Select(e => e.Description)));
+    }
+    else
+    {
+        admin.Role = UserRole.Admin;
+        admin.AccountStatus = "active";
+        admin.UpdatedAt = DateTime.UtcNow;
+        await userManager.UpdateAsync(admin);
+    }
+    if (!await userManager.IsInRoleAsync(admin, "Admin"))
+        await userManager.AddToRoleAsync(admin, "Admin");
+}

@@ -53,8 +53,7 @@ public class AssignmentConfiguration
                     value => JsonSerializer.Deserialize<List<string>>(
                         value,
                         (JsonSerializerOptions?)null)
-                        ?? new List<string>()))
-            .HasColumnType("nvarchar(max)");
+                        ?? new List<string>()));
 
         var attachmentsComparer =
             new ValueComparer<List<string>>(

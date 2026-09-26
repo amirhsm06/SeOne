@@ -21,7 +21,16 @@ public class CourseConfiguration : IEntityTypeConfiguration<Course>
             .HasMaxLength(50);
 
         builder.Property(x => x.Price)
-            .HasColumnType("decimal(18,2)")
+            .HasPrecision(18, 2)
+            .HasDefaultValue(0m);
+
+        builder.Property(x => x.Currency)
+            .IsRequired()
+            .HasMaxLength(10)
+            .HasDefaultValue("IRR");
+
+        builder.Property(x => x.DiscountPercent)
+            .HasPrecision(5, 2)
             .HasDefaultValue(0m);
 
         builder.Property(x => x.Duration)
@@ -30,11 +39,27 @@ public class CourseConfiguration : IEntityTypeConfiguration<Course>
         builder.Property(x => x.ImageUrl)
             .HasMaxLength(500);
 
+        builder.Property(x => x.Category)
+            .IsRequired()
+            .HasMaxLength(100);
+
+        builder.Property(x => x.Language)
+            .IsRequired()
+            .HasMaxLength(20);
+
+        builder.Property(x => x.IsFeatured)
+            .IsRequired();
+
         builder.Property(x => x.IsPublished)
             .IsRequired();
 
         builder.Property(x => x.CreatedAt)
             .IsRequired();
+
+        builder.HasIndex(x => x.Language);
+        builder.HasIndex(x => x.Category);
+        builder.HasIndex(x => x.Level);
+        builder.HasIndex(x => x.IsFeatured);
 
         builder.HasOne(x => x.Teacher)
             .WithMany()

@@ -10,6 +10,8 @@ public class Booking
 
     public Guid TeacherId { get; set; }
 
+    public Guid? CourseId { get; set; }
+
     public DateTime StartTime { get; set; }
 
     public DateTime EndTime { get; set; }
@@ -21,6 +23,8 @@ public class Booking
     public User Student { get; set; } = null!;
 
     public User Teacher { get; set; } = null!;
+
+    public Course? Course { get; set; }
 }
 
 public enum BookingStatus

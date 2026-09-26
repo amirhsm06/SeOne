@@ -1,5 +1,3 @@
-using System;
-
 namespace SeOne.Domain.Entities;
 
 public class Lesson
@@ -11,6 +9,14 @@ public class Lesson
     public string Title { get; set; } = string.Empty;
 
     public string Content { get; set; } = string.Empty;
+
+    public string Description { get; set; } = string.Empty;
+
+    public string? VideoUrl { get; set; }
+
+    public string? AudioUrl { get; set; }
+
+    public int? Duration { get; set; }
 
     public int Order { get; set; }
 

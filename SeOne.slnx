@@ -3,4 +3,5 @@
   <Project Path="SeOne.Application/SeOne.Application.csproj" />
   <Project Path="SeOne.Domain/SeOne.Domain.csproj" />
   <Project Path="SeOne.Infrastructure/SeOne.Infrastructure.csproj" />
+  <Project Path="SeOne.Migrations.Postgres/SeOne.Migrations.Postgres.csproj" Id="3166c95b-3852-4375-97a9-7534a6182fdf" />
 </Solution>
