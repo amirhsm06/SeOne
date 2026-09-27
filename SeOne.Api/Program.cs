@@ -173,10 +173,15 @@ app.Run();
 
 static async Task SeedAdminAsync(WebApplication app)
 {
-    var email = Environment.GetEnvironmentVariable("SEONE_ADMIN_EMAIL");
-    var password = Environment.GetEnvironmentVariable("SEONE_ADMIN_PASSWORD");
-    var fullName = Environment.GetEnvironmentVariable("SEONE_ADMIN_NAME") ?? "SE ONE Administrator";
-    if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password)) return;
+	var email = app.Configuration["SEONE_ADMIN_EMAIL"];
+	var password = app.Configuration["SEONE_ADMIN_PASSWORD"];
+	var fullName = app.Configuration["SEONE_ADMIN_NAME"] ?? "SE ONE Administrator";
+
+	if (string.IsNullOrWhiteSpace(email))
+    		throw new InvalidOperationException("SEONE_ADMIN_EMAIL is missing from production configuration.");
+
+	if (string.IsNullOrWhiteSpace(password))
+    		throw new InvalidOperationException("SEONE_ADMIN_PASSWORD is missing from production configuration.");
 
     using var scope = app.Services.CreateScope();
     var userManager = scope.ServiceProvider.GetRequiredService<UserManager<User>>();

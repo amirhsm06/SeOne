@@ -15,8 +15,8 @@ COPY . .
 RUN dotnet publish "SeOne.Api/SeOne.Api.csproj" \
     -c Release \
     -o /app/publish \
-    --no-restore \
-    /p:UseAppHost=false
+    /p:UseAppHost=false \
+    -v:minimal
 
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
