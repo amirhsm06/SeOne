@@ -12,10 +12,18 @@ using SeOne.Domain.Enums;
 
 
 var builder = WebApplication.CreateBuilder(args);
-var allowedOrigins =
+var configuredOrigins =
     builder.Configuration["AllowedOrigins"]?
         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-    ?? ["http://localhost:3000"];
+    ?? [];
+
+var allowedOrigins = configuredOrigins
+    .Concat([
+        "https://se-one-delta.vercel.app",
+        "http://localhost:3000"
+    ])
+    .Distinct(StringComparer.OrdinalIgnoreCase)
+    .ToArray();
 
 builder.Services.AddCors(options =>
 {
@@ -149,7 +157,7 @@ if (app.Environment.IsDevelopment())
     app.UseHttpsRedirection();
 }
 
-app.UseHttpsRedirection();
+app.UseRouting();
 
 app.UseCors("Frontend");
 
