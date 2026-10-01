@@ -30,7 +30,5 @@ public class Course
 
     public DateTime CreatedAt { get; set; }
 
-    public Guid TeacherId { get; set; }
 
-    public User Teacher { get; set; } = null!;
 }

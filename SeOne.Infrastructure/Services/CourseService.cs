@@ -15,19 +15,25 @@ public class CourseService : ICourseService
         _context = context;
     }
 
-    public async Task<CourseDto?> UpdateAsync(Guid courseId, Guid teacherId, string title, string description, string level, decimal price, string? duration, string? imageUrl)
+    public async Task<CourseDto?> UpdateAsync(
+        Guid courseId,
+        Guid teacherId,
+        string title,
+        string description,
+        string level,
+        decimal price,
+        string? duration,
+        string? imageUrl)
     {
-        var course = await _context.Set<Domain.Entities.Course>()
-            .Include(c => c.Teacher)
+        var course = await _context.Set<Course>()
             .FirstOrDefaultAsync(c => c.Id == courseId);
 
         if (course is null)
             return null;
 
-        if (course.TeacherId != teacherId)
+        if (!await TeacherHasCourseAccessAsync(courseId, teacherId))
             return null;
 
-        // Only update allowed fields
         course.Title = title;
         course.Description = description;
         course.Level = level;
@@ -37,55 +43,34 @@ public class CourseService : ICourseService
 
         await _context.SaveChangesAsync();
 
-        return new CourseDto
-        {
-            Id = course.Id,
-            Title = course.Title,
-            Description = course.Description,
-            Level = course.Level,
-            Price = course.Price,
-            Currency = course.Currency,
-            DiscountPercent = course.DiscountPercent,
-            Duration = course.Duration,
-            ImageUrl = course.ImageUrl,
-            Category = course.Category,
-            Language = course.Language,
-            IsFeatured = course.IsFeatured,
-            IsPublished = course.IsPublished,
-            CreatedAt = course.CreatedAt,
-            TeacherId = course.TeacherId,
-            TeacherName = course.Teacher?.FullName ?? string.Empty
-        };
+        return await GetCourseDtoAsync(courseId);
     }
 
     public async Task<bool> DeleteAsync(Guid courseId, Guid teacherId)
     {
-        var course = await _context.Set<Domain.Entities.Course>()
-            .FirstOrDefaultAsync(c => c.Id == courseId);
+        var courseExists = await _context.Set<Course>()
+            .AnyAsync(c => c.Id == courseId);
 
-        if (course is null)
+        if (!courseExists)
             return false;
 
-        if (course.TeacherId != teacherId)
+        if (!await TeacherHasCourseAccessAsync(courseId, teacherId))
             return false;
 
-        // Perform dependent deletes in a transaction to avoid leaving orphaned records.
-        // Deletion order: LessonProgress -> Lessons -> CourseModules -> Practice -> Enrollments -> Course
-        // Use ExecuteDeleteAsync where possible to perform server-side deletes without loading entities.
         using var tx = await _context.Database.BeginTransactionAsync();
+
         try
         {
-            // Get module ids for the course
-            var moduleIds = await _context.Set<Domain.Entities.CourseModule>()
+            var moduleIds = await _context.Set<CourseModule>()
                 .Where(m => m.CourseId == courseId)
                 .Select(m => m.Id)
                 .ToListAsync();
 
-            // Get lesson ids for those modules
             var lessonIds = new List<Guid>();
+
             if (moduleIds.Count > 0)
             {
-                lessonIds = await _context.Set<Domain.Entities.Lesson>()
+                lessonIds = await _context.Set<Lesson>()
                     .Where(l => moduleIds.Contains(l.CourseModuleId))
                     .Select(l => l.Id)
                     .ToListAsync();
@@ -93,58 +78,51 @@ public class CourseService : ICourseService
 
             if (lessonIds.Count > 0)
             {
-                // delete learning sessions first because LearningSession -> Lesson is restrictive.
-                await _context.Set<Domain.Entities.LearningSession>()
+                await _context.Set<LearningSession>()
                     .Where(s => lessonIds.Contains(s.LessonId))
                     .ExecuteDeleteAsync();
 
-                // delete lesson progress for these lessons
-                await _context.Set<Domain.Entities.LessonProgress>()
+                await _context.Set<LessonProgress>()
                     .Where(p => lessonIds.Contains(p.LessonId))
                     .ExecuteDeleteAsync();
 
-                // delete lessons
-                await _context.Set<Domain.Entities.Lesson>()
+                await _context.Set<Lesson>()
                     .Where(l => lessonIds.Contains(l.Id))
                     .ExecuteDeleteAsync();
             }
 
             if (moduleIds.Count > 0)
             {
-                // delete modules
-                await _context.Set<Domain.Entities.CourseModule>()
+                await _context.Set<CourseModule>()
                     .Where(m => moduleIds.Contains(m.Id))
                     .ExecuteDeleteAsync();
             }
 
-            // delete practice data for the course before deleting the course.
-            // Practice uses restrictive foreign keys to avoid SQL Server cascade-path issues.
-            var practiceIds = await _context.Set<Domain.Entities.Practice>()
+            var practiceIds = await _context.Set<Practice>()
                 .Where(x => x.CourseId == courseId)
                 .Select(x => x.Id)
                 .ToListAsync();
 
             if (practiceIds.Count > 0)
             {
-                await _context.Set<Domain.Entities.PracticeAttemptAnswer>()
+                await _context.Set<PracticeAttemptAnswer>()
                     .Where(x => practiceIds.Contains(x.Attempt.PracticeId))
                     .ExecuteDeleteAsync();
 
-                await _context.Set<Domain.Entities.PracticeAttempt>()
+                await _context.Set<PracticeAttempt>()
                     .Where(x => practiceIds.Contains(x.PracticeId))
                     .ExecuteDeleteAsync();
 
-                await _context.Set<Domain.Entities.PracticeQuestion>()
+                await _context.Set<PracticeQuestion>()
                     .Where(x => practiceIds.Contains(x.PracticeId))
                     .ExecuteDeleteAsync();
 
-                await _context.Set<Domain.Entities.Practice>()
+                await _context.Set<Practice>()
                     .Where(x => practiceIds.Contains(x.Id))
                     .ExecuteDeleteAsync();
             }
 
-            // delete enrollments for the course
-            await _context.Set<Domain.Entities.Enrollment>()
+            await _context.Set<Enrollment>()
                 .Where(e => e.CourseId == courseId)
                 .ExecuteDeleteAsync();
 
@@ -152,8 +130,23 @@ public class CourseService : ICourseService
                 .Where(x => x.RelatedCourseId == courseId)
                 .ExecuteDeleteAsync();
 
-            // finally delete the course
-            await _context.Set<Domain.Entities.Course>()
+            var instanceIds = await _context.Set<CourseInstance>()
+                .Where(x => x.CourseId == courseId)
+                .Select(x => x.Id)
+                .ToListAsync();
+
+            if (instanceIds.Count > 0)
+            {
+                await _context.Set<CourseInstanceTeacher>()
+                    .Where(x => instanceIds.Contains(x.CourseInstanceId))
+                    .ExecuteDeleteAsync();
+
+                await _context.Set<CourseInstance>()
+                    .Where(x => instanceIds.Contains(x.Id))
+                    .ExecuteDeleteAsync();
+            }
+
+            await _context.Set<Course>()
                 .Where(c => c.Id == courseId)
                 .ExecuteDeleteAsync();
 
@@ -170,7 +163,7 @@ public class CourseService : ICourseService
 
     public async Task<List<CourseDto>> GetAllAsync(Guid userId, string userRole)
     {
-        var query = _context.Set<Domain.Entities.Course>().Include(x => x.Teacher).AsQueryable();
+        var query = _context.Set<Course>().AsQueryable();
 
         if (string.Equals(userRole, "Student", StringComparison.OrdinalIgnoreCase))
         {
@@ -178,11 +171,72 @@ public class CourseService : ICourseService
         }
         else if (string.Equals(userRole, "Teacher", StringComparison.OrdinalIgnoreCase))
         {
-            query = query.Where(x => x.TeacherId == userId);
+            query = query.Where(x =>
+                _context.Set<CourseInstanceTeacher>()
+                    .Any(t =>
+                        t.TeacherId == userId &&
+                        t.CourseInstance.CourseId == x.Id));
         }
         else
         {
-            // default to published for unknown roles
+            query = query.Where(x => x.IsPublished);
+        }
+
+        return await query
+            .OrderByDescending(x => x.CreatedAt)
+            .Select(x => new CourseDto
+            {
+                Id = x.Id,
+                Title = x.Title,
+                Description = x.Description,
+                Level = x.Level,
+                Price = x.Price,
+                Currency = x.Currency,
+                DiscountPercent = x.DiscountPercent,
+                Duration = x.Duration,
+                ImageUrl = x.ImageUrl,
+                Category = x.Category,
+                Language = x.Language,
+                IsFeatured = x.IsFeatured,
+                IsPublished = x.IsPublished,
+                CreatedAt = x.CreatedAt,
+
+                TeacherId = _context.Set<CourseInstanceTeacher>()
+                    .Where(t => t.CourseInstance.CourseId == x.Id)
+                    .OrderBy(t => t.CourseInstance.CreatedAt)
+                    .ThenBy(t => t.CreatedAt)
+                    .Select(t => t.TeacherId)
+                    .FirstOrDefault(),
+
+                TeacherName = _context.Set<CourseInstanceTeacher>()
+                    .Where(t => t.CourseInstance.CourseId == x.Id)
+                    .OrderBy(t => t.CourseInstance.CreatedAt)
+                    .ThenBy(t => t.CreatedAt)
+                    .Select(t => t.Teacher.FullName)
+                    .FirstOrDefault() ?? string.Empty
+            })
+            .ToListAsync();
+    }
+
+    public async Task<CourseDto?> GetByIdAsync(Guid id, Guid userId, string userRole)
+    {
+        var query = _context.Set<Course>()
+            .Where(x => x.Id == id);
+
+        if (string.Equals(userRole, "Student", StringComparison.OrdinalIgnoreCase))
+        {
+            query = query.Where(x => x.IsPublished);
+        }
+        else if (string.Equals(userRole, "Teacher", StringComparison.OrdinalIgnoreCase))
+        {
+            query = query.Where(x =>
+                _context.Set<CourseInstanceTeacher>()
+                    .Any(t =>
+                        t.TeacherId == userId &&
+                        t.CourseInstance.CourseId == x.Id));
+        }
+        else
+        {
             query = query.Where(x => x.IsPublished);
         }
 
@@ -203,79 +257,55 @@ public class CourseService : ICourseService
                 IsFeatured = x.IsFeatured,
                 IsPublished = x.IsPublished,
                 CreatedAt = x.CreatedAt,
-                TeacherId = x.TeacherId,
-                TeacherName = x.Teacher.FullName
+
+                TeacherId = _context.Set<CourseInstanceTeacher>()
+                    .Where(t => t.CourseInstance.CourseId == x.Id)
+                    .OrderBy(t => t.CourseInstance.CreatedAt)
+                    .ThenBy(t => t.CreatedAt)
+                    .Select(t => t.TeacherId)
+                    .FirstOrDefault(),
+
+                TeacherName = _context.Set<CourseInstanceTeacher>()
+                    .Where(t => t.CourseInstance.CourseId == x.Id)
+                    .OrderBy(t => t.CourseInstance.CreatedAt)
+                    .ThenBy(t => t.CreatedAt)
+                    .Select(t => t.Teacher.FullName)
+                    .FirstOrDefault() ?? string.Empty
             })
-            .ToListAsync();
+            .FirstOrDefaultAsync();
     }
 
-    public async Task<CourseDto?> GetByIdAsync(Guid id, Guid userId, string userRole)
+    public async Task<bool> SetPublishedAsync(
+        Guid courseId,
+        Guid teacherId,
+        bool isPublished)
     {
-        var course = await _context.Set<Domain.Entities.Course>()
-            .Include(x => x.Teacher)
-            .FirstOrDefaultAsync(x => x.Id == id);
-
-        if (course is null)
-            return null;
-
-        if (string.Equals(userRole, "Student", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!course.IsPublished)
-                return null;
-        }
-        else if (string.Equals(userRole, "Teacher", StringComparison.OrdinalIgnoreCase))
-        {
-            if (course.TeacherId != userId)
-                return null;
-        }
-        else
-        {
-            // default: only published
-            if (!course.IsPublished)
-                return null;
-        }
-
-        return new CourseDto
-        {
-            Id = course.Id,
-            Title = course.Title,
-            Description = course.Description,
-            Level = course.Level,
-            Price = course.Price,
-            Currency = course.Currency,
-            DiscountPercent = course.DiscountPercent,
-            Duration = course.Duration,
-            ImageUrl = course.ImageUrl,
-            Category = course.Category,
-            Language = course.Language,
-            IsFeatured = course.IsFeatured,
-            IsPublished = course.IsPublished,
-            CreatedAt = course.CreatedAt,
-            TeacherId = course.TeacherId,
-            TeacherName = course.Teacher.FullName
-        };
-    }
-
-    public async Task<bool> SetPublishedAsync(Guid courseId, Guid teacherId, bool isPublished)
-    {
-        var course = await _context.Set<Domain.Entities.Course>()
+        var course = await _context.Set<Course>()
             .FirstOrDefaultAsync(c => c.Id == courseId);
 
         if (course is null)
             return false;
 
-        if (course.TeacherId != teacherId)
+        if (!await TeacherHasCourseAccessAsync(courseId, teacherId))
             return false;
 
         course.IsPublished = isPublished;
+
         await _context.SaveChangesAsync();
 
         return true;
     }
 
-    public async Task<CourseDto> CreateAsync(string title, string description, string level, decimal price, string? duration, string? imageUrl, Guid teacherId)
+    public async Task<CourseDto> CreateAsync(
+        string title,
+        string description,
+        string level,
+        decimal price,
+        string? duration,
+        string? imageUrl,
+        Guid teacherId)
     {
-        var course = new Domain.Entities.Course
+        var course = new Course
         {
             Id = Guid.NewGuid(),
             Title = title,
@@ -285,16 +315,36 @@ public class CourseService : ICourseService
             Duration = duration,
             ImageUrl = imageUrl,
             IsPublished = false,
-            CreatedAt = DateTime.UtcNow,
-            TeacherId = teacherId
+            CreatedAt = DateTime.UtcNow
         };
 
-        _context.Set<Domain.Entities.Course>().Add(course);
+        var instance = new CourseInstance
+        {
+            Id = Guid.NewGuid(),
+            CourseId = course.Id,
+            StartDate = null,
+            EndDate = null,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        var instanceTeacher = new CourseInstanceTeacher
+        {
+            Id = Guid.NewGuid(),
+            CourseInstanceId = instance.Id,
+            TeacherId = teacherId,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        _context.Set<Course>().Add(course);
+        _context.Set<CourseInstance>().Add(instance);
+        _context.Set<CourseInstanceTeacher>().Add(instanceTeacher);
+
         await _context.SaveChangesAsync();
 
-        // Load teacher full name
-        var teacher = await _context.Users.FindAsync(teacherId);
-        var teacherName = teacher?.FullName ?? string.Empty;
+        var teacherName = await _context.Users
+            .Where(x => x.Id == teacherId)
+            .Select(x => x.FullName)
+            .FirstOrDefaultAsync() ?? string.Empty;
 
         return new CourseDto
         {
@@ -312,33 +362,87 @@ public class CourseService : ICourseService
             IsFeatured = course.IsFeatured,
             IsPublished = course.IsPublished,
             CreatedAt = course.CreatedAt,
-            TeacherId = course.TeacherId,
+            TeacherId = teacherId,
             TeacherName = teacherName
         };
     }
 
     public async Task<List<CourseCatalogDto>> GetPublishedCatalogAsync(string lang)
     {
-        // lang parameter currently unused — reserved for future localization
-        var query = _context.Set<Domain.Entities.Course>().Where(c => c.IsPublished);
+        var query = _context.Set<Course>()
+            .Where(c => c.IsPublished);
 
-        return await query.Select(c => new CourseCatalogDto
-        {
-            Id = c.Id,
-            Title = c.Title,
-            Level = c.Level,
-            Description = c.Description,
-            LessonCount = _context.Set<Domain.Entities.Lesson>().Count(l => l.CourseModule.CourseId == c.Id),
-            StudentCount = _context.Set<Domain.Entities.Enrollment>().Count(e => e.CourseId == c.Id),
-            Price = c.DiscountPercent > 0 ? c.Price * (1m - c.DiscountPercent / 100m) : c.Price,
-            BasePrice = c.Price,
-            Currency = c.Currency,
-            DiscountPercent = c.DiscountPercent,
-            Duration = c.Duration,
-            ImageUrl = c.ImageUrl,
-            Category = c.Category,
-            Language = c.Language,
-            IsFeatured = c.IsFeatured
-        }).ToListAsync();
+        return await query
+            .Select(c => new CourseCatalogDto
+            {
+                Id = c.Id,
+                Title = c.Title,
+                Level = c.Level,
+                Description = c.Description,
+                LessonCount = _context.Set<Lesson>()
+                    .Count(l => l.CourseModule.CourseId == c.Id),
+                StudentCount = _context.Set<Enrollment>()
+                    .Count(e => e.CourseId == c.Id),
+                Price = c.DiscountPercent > 0
+                    ? c.Price * (1m - c.DiscountPercent / 100m)
+                    : c.Price,
+                BasePrice = c.Price,
+                Currency = c.Currency,
+                DiscountPercent = c.DiscountPercent,
+                Duration = c.Duration,
+                ImageUrl = c.ImageUrl,
+                Category = c.Category,
+                Language = c.Language,
+                IsFeatured = c.IsFeatured
+            })
+            .ToListAsync();
+    }
+
+    private async Task<bool> TeacherHasCourseAccessAsync(
+        Guid courseId,
+        Guid teacherId)
+    {
+        return await _context.Set<CourseInstanceTeacher>()
+            .AnyAsync(x =>
+                x.TeacherId == teacherId &&
+                x.CourseInstance.CourseId == courseId);
+    }
+
+    private async Task<CourseDto?> GetCourseDtoAsync(Guid courseId)
+    {
+        return await _context.Set<Course>()
+            .Where(x => x.Id == courseId)
+            .Select(x => new CourseDto
+            {
+                Id = x.Id,
+                Title = x.Title,
+                Description = x.Description,
+                Level = x.Level,
+                Price = x.Price,
+                Currency = x.Currency,
+                DiscountPercent = x.DiscountPercent,
+                Duration = x.Duration,
+                ImageUrl = x.ImageUrl,
+                Category = x.Category,
+                Language = x.Language,
+                IsFeatured = x.IsFeatured,
+                IsPublished = x.IsPublished,
+                CreatedAt = x.CreatedAt,
+
+                TeacherId = _context.Set<CourseInstanceTeacher>()
+                    .Where(t => t.CourseInstance.CourseId == x.Id)
+                    .OrderBy(t => t.CourseInstance.CreatedAt)
+                    .ThenBy(t => t.CreatedAt)
+                    .Select(t => t.TeacherId)
+                    .FirstOrDefault(),
+
+                TeacherName = _context.Set<CourseInstanceTeacher>()
+                    .Where(t => t.CourseInstance.CourseId == x.Id)
+                    .OrderBy(t => t.CourseInstance.CreatedAt)
+                    .ThenBy(t => t.CreatedAt)
+                    .Select(t => t.Teacher.FullName)
+                    .FirstOrDefault() ?? string.Empty
+            })
+            .FirstOrDefaultAsync();
     }
 }

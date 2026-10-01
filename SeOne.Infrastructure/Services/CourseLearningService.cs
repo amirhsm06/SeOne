@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using SeOne.Application.DTOs;
 using SeOne.Application.Interfaces;
+using SeOne.Domain.Entities;
 using SeOne.Infrastructure.Persistence;
 
 namespace SeOne.Infrastructure.Services;
@@ -18,8 +19,16 @@ public class CourseLearningService : ICourseLearningService
     {
         // load course and teacher
         var course = await _context.Set<Domain.Entities.Course>()
-            .Include(c => c.Teacher)
-            .FirstOrDefaultAsync(c => c.Id == courseId);
+           .FirstOrDefaultAsync(c => c.Id == courseId);
+
+        var teacher = course is null
+            ? null
+            : await _context.Set<CourseInstanceTeacher>()
+                .Where(t => t.CourseInstance.CourseId == course.Id)
+                .OrderBy(t => t.CourseInstance.CreatedAt)
+                .ThenBy(t => t.CreatedAt)
+                .Select(t => t.Teacher)
+                .FirstOrDefaultAsync();
 
         if (course is null)
             return null;
@@ -60,8 +69,8 @@ public class CourseLearningService : ICourseLearningService
             Id = course.Id,
             Title = course.Title,
             Description = course.Description,
-            TeacherId = course.TeacherId,
-            TeacherName = course.Teacher.FullName
+            TeacherId = teacher?.Id ?? Guid.Empty,
+            TeacherName = teacher?.FullName ?? string.Empty
         };
 
         // build modules

@@ -215,8 +215,14 @@ public class CompatibilityController : ApiControllerBase
         if (module is null)
             return NotFound();
 
-        if (userRole.Equals("Teacher", StringComparison.OrdinalIgnoreCase) && module.Course.TeacherId != userId)
+        if (userRole.Equals("Teacher", StringComparison.OrdinalIgnoreCase) &&
+            !await _db.Set<CourseInstanceTeacher>()
+                .AnyAsync(x =>
+                    x.TeacherId == userId &&
+                    x.CourseInstance.CourseId == module.CourseId))
+        {
             return Forbid();
+        }
 
         if (userRole.Equals("Student", StringComparison.OrdinalIgnoreCase))
         {
@@ -246,9 +252,14 @@ public class CompatibilityController : ApiControllerBase
 
         if (module is null)
             return NotFound();
-
-        if (role.Equals("Teacher", StringComparison.OrdinalIgnoreCase) && module.Course.TeacherId != userId)
+        if (role.Equals("Teacher", StringComparison.OrdinalIgnoreCase) &&
+            !await _db.Set<CourseInstanceTeacher>()
+                .AnyAsync(x =>
+                    x.TeacherId == userId &&
+                    x.CourseInstance.CourseId == module.CourseId))
+        {
             return Forbid();
+        }
 
         if (role.Equals("Student", StringComparison.OrdinalIgnoreCase))
         {
@@ -288,8 +299,14 @@ public class CompatibilityController : ApiControllerBase
         if (lesson is null)
             return NotFound();
 
-        if (role.Equals("Teacher", StringComparison.OrdinalIgnoreCase) && lesson.CourseModule.Course.TeacherId != userId)
+        if (role.Equals("Teacher", StringComparison.OrdinalIgnoreCase) &&
+            !await _db.Set<CourseInstanceTeacher>()
+                .AnyAsync(x =>
+                    x.TeacherId == userId &&
+                    x.CourseInstance.CourseId == lesson.CourseModule.CourseId))
+        {
             return Forbid();
+        }
 
         if (role.Equals("Student", StringComparison.OrdinalIgnoreCase))
         {

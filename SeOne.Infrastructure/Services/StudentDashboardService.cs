@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using SeOne.Application.DTOs;
 using SeOne.Application.Interfaces;
+using SeOne.Domain.Entities;
 using SeOne.Infrastructure.Persistence;
 
 namespace SeOne.Infrastructure.Services;
@@ -38,8 +39,19 @@ public class StudentDashboardService : IStudentDashboardService
                 Title = x.Course.Title,
                 Level = x.Course.Level,
                 Description = x.Course.Description,
-                TeacherId = x.Course.TeacherId,
-                TeacherName = x.Course.Teacher.FullName,
+                TeacherId = _context.Set<CourseInstanceTeacher>()
+    .Where(t => t.CourseInstance.CourseId == x.Course.Id)
+    .OrderBy(t => t.CourseInstance.CreatedAt)
+    .ThenBy(t => t.CreatedAt)
+    .Select(t => t.TeacherId)
+    .FirstOrDefault(),
+
+                TeacherName = _context.Set<CourseInstanceTeacher>()
+    .Where(t => t.CourseInstance.CourseId == x.Course.Id)
+    .OrderBy(t => t.CourseInstance.CreatedAt)
+    .ThenBy(t => t.CreatedAt)
+    .Select(t => t.Teacher.FullName)
+    .FirstOrDefault() ?? string.Empty,
                 Price = x.Course.Price,
                 Duration = x.Course.Duration,
                 ImageUrl = x.Course.ImageUrl,

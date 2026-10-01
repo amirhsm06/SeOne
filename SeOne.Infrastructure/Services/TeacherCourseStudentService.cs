@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using SeOne.Application.DTOs;
 using SeOne.Application.Interfaces;
+using SeOne.Domain.Entities;
 using SeOne.Infrastructure.Persistence;
 
 namespace SeOne.Infrastructure.Services;
@@ -16,9 +17,20 @@ public class TeacherCourseStudentService : ITeacherCourseStudentService
 
     public async Task<List<TeacherCourseStudentDto>> GetStudentsForCourseAsync(Guid teacherId, Guid courseId)
     {
-        // Verify course exists and belongs to teacher
+        // Verify course exists
         var course = await _context.Set<Domain.Entities.Course>()
-            .FirstOrDefaultAsync(c => c.Id == courseId && c.TeacherId == teacherId);
+            .FirstOrDefaultAsync(c => c.Id == courseId);
+
+        if (course is null)
+            return new List<TeacherCourseStudentDto>();
+
+        var hasAccess = await _context.Set<CourseInstanceTeacher>()
+            .AnyAsync(t =>
+                t.TeacherId == teacherId &&
+                t.CourseInstance.CourseId == courseId);
+
+        if (!hasAccess)
+            return new List<TeacherCourseStudentDto>();
 
         if (course is null)
             return new List<TeacherCourseStudentDto>();

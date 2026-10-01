@@ -26,8 +26,13 @@ public class LessonService : ILessonService
         if (module is null)
             return null;
 
-        if (module.Course.TeacherId != teacherId)
+        if (!await _context.Set<CourseInstanceTeacher>()
+            .AnyAsync(t =>
+                t.TeacherId == teacherId &&
+                t.CourseInstance.CourseId == module.CourseId))
+        {
             return null;
+        }
 
         var lesson = new Lesson
         {
@@ -74,7 +79,12 @@ public class LessonService : ILessonService
         }
         else if (string.Equals(userRole, "Teacher", StringComparison.OrdinalIgnoreCase))
         {
-            if (module.Course.TeacherId != userId)
+            var hasAccess = await _context.Set<CourseInstanceTeacher>()
+                .AnyAsync(t =>
+                    t.TeacherId == userId &&
+                    t.CourseInstance.CourseId == module.CourseId);
+
+            if (!hasAccess)
                 return null;
         }
         else
@@ -113,8 +123,13 @@ public class LessonService : ILessonService
         if (lesson.CourseModuleId != courseModuleId)
             return null;
 
-        if (lesson.CourseModule.Course.TeacherId != teacherId)
+        if (!await _context.Set<CourseInstanceTeacher>()
+            .AnyAsync(t =>
+                t.TeacherId == teacherId &&
+                t.CourseInstance.CourseId == lesson.CourseModule.CourseId))
+        {
             return null;
+        }
 
         lesson.Title = title;
         lesson.Content = content;
@@ -146,8 +161,13 @@ public class LessonService : ILessonService
         if (lesson.CourseModuleId != courseModuleId)
             return false;
 
-        if (lesson.CourseModule.Course.TeacherId != teacherId)
+        if (!await _context.Set<CourseInstanceTeacher>()
+            .AnyAsync(t =>
+                t.TeacherId == teacherId &&
+                t.CourseInstance.CourseId == lesson.CourseModule.CourseId))
+        {
             return false;
+        }
 
         _context.Set<Lesson>().Remove(lesson);
         await _context.SaveChangesAsync();

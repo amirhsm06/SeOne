@@ -76,9 +76,21 @@ public class TeacherDashboardCompatibilityController : ApiControllerBase
     [HttpGet("schedule")]
     public async Task<IActionResult> Schedule([FromQuery]string? startDate,[FromQuery]string? endDate)=>Ok(await GetClasses(RequireUserId(),null,startDate,endDate));
     [HttpGet("students")]
-    public async Task<IActionResult> Students([FromQuery]Guid? courseId,[FromQuery]bool activeOnly=false)
+    public async Task<IActionResult> Students([FromQuery] Guid? courseId,
+    [FromQuery] bool activeOnly = false)
     {
-        var teacherId=RequireUserId();var courses=await _db.Set<Course>().Where(c=>c.TeacherId==teacherId&&(courseId==null||c.Id==courseId)).ToListAsync();var ids=courses.Select(c=>c.Id).ToList();var es=await _db.Set<Enrollment>().Include(e=>e.Student).Include(e=>e.Course).Where(e=>ids.Contains(e.CourseId)).ToListAsync();var result=new List<object>();foreach(var e in es){var total=await _db.Lessons.CountAsync(l=>l.CourseModule.CourseId==e.CourseId);var done=await _db.LessonProgress.CountAsync(p=>p.StudentId==e.StudentId&&p.IsCompleted&&p.Lesson.CourseModule.CourseId==e.CourseId);var last=await _db.LessonProgress.Where(p=>p.StudentId==e.StudentId&&p.Lesson.CourseModule.CourseId==e.CourseId&&p.LastAccessedAt!=null).OrderByDescending(p=>p.LastAccessedAt).Select(p=>p.LastAccessedAt).FirstOrDefaultAsync();var upcoming=await _db.Bookings.Where(b=>b.TeacherId==teacherId&&b.StudentId==e.StudentId&&b.CourseId==e.CourseId&&b.StartTime>DateTime.UtcNow&&b.Status!=BookingStatus.Cancelled).OrderBy(b=>b.StartTime).FirstOrDefaultAsync();if(activeOnly&&upcoming==null&&last==null)continue;result.Add(new{studentId=e.StudentId,studentName=e.Student.FullName,studentAvatar=e.Student.AvatarUrl,studentEmail=e.Student.Email,courseId=e.CourseId,courseTitle=e.Course.Title,enrolledAt=e.EnrolledAt,progress=total==0?0:Math.Round(done*100d/total,2),completedLessons=done,totalLessons=total,lastActivity=last??e.EnrolledAt,upcomingClass=upcoming==null?null:new{id=upcoming.Id,scheduledDate=upcoming.StartTime.ToString("yyyy-MM-dd"),startTime=upcoming.StartTime.ToString("HH:mm")}});}return Ok(result);
+        var teacherId = RequireUserId();
+
+        var courses = await _db.Set<Course>()
+            .Where(c =>
+                _db.Set<CourseInstanceTeacher>()
+                    .Any(t =>
+                        t.TeacherId == teacherId &&
+                        t.CourseInstance.CourseId == c.Id) &&
+                (courseId == null || c.Id == courseId))
+            .ToListAsync();
+
+        var ids = courses.Select(c => c.Id).ToList(); var es=await _db.Set<Enrollment>().Include(e=>e.Student).Include(e=>e.Course).Where(e=>ids.Contains(e.CourseId)).ToListAsync();var result=new List<object>();foreach(var e in es){var total=await _db.Lessons.CountAsync(l=>l.CourseModule.CourseId==e.CourseId);var done=await _db.LessonProgress.CountAsync(p=>p.StudentId==e.StudentId&&p.IsCompleted&&p.Lesson.CourseModule.CourseId==e.CourseId);var last=await _db.LessonProgress.Where(p=>p.StudentId==e.StudentId&&p.Lesson.CourseModule.CourseId==e.CourseId&&p.LastAccessedAt!=null).OrderByDescending(p=>p.LastAccessedAt).Select(p=>p.LastAccessedAt).FirstOrDefaultAsync();var upcoming=await _db.Bookings.Where(b=>b.TeacherId==teacherId&&b.StudentId==e.StudentId&&b.CourseId==e.CourseId&&b.StartTime>DateTime.UtcNow&&b.Status!=BookingStatus.Cancelled).OrderBy(b=>b.StartTime).FirstOrDefaultAsync();if(activeOnly&&upcoming==null&&last==null)continue;result.Add(new{studentId=e.StudentId,studentName=e.Student.FullName,studentAvatar=e.Student.AvatarUrl,studentEmail=e.Student.Email,courseId=e.CourseId,courseTitle=e.Course.Title,enrolledAt=e.EnrolledAt,progress=total==0?0:Math.Round(done*100d/total,2),completedLessons=done,totalLessons=total,lastActivity=last??e.EnrolledAt,upcomingClass=upcoming==null?null:new{id=upcoming.Id,scheduledDate=upcoming.StartTime.ToString("yyyy-MM-dd"),startTime=upcoming.StartTime.ToString("HH:mm")}});}return Ok(result);
     }
     [HttpGet("earnings")]
     public async Task<IActionResult> Earnings([FromQuery]string? period="month"){var id=RequireUserId();var start=DateTime.UtcNow.AddMonths(-1).Date;if(string.Equals(period,"week",StringComparison.OrdinalIgnoreCase))start=DateTime.UtcNow.AddDays(-7).Date;var bookings=await _db.Bookings.Include(b=>b.Course).Where(b=>b.TeacherId==id&&b.Status==BookingStatus.Completed&&b.EndTime>=start).ToListAsync();var rows=bookings.GroupBy(b=>b.StartTime.Date).OrderBy(g=>g.Key).Select(g=>new{date=g.Key.ToString("yyyy-MM-dd"),earnings=g.Sum(EarningsForBooking),hours=Math.Round(g.Sum(b=>(b.EndTime-b.StartTime).TotalHours),2),classes=g.Count()}).ToList();var total=rows.Sum(r=>r.earnings);var hours=rows.Sum(r=>r.hours);return Ok(new{teacherId=id,period=period??"month",totalEarnings=total,currency=bookings.Select(b=>b.Course?.Currency).FirstOrDefault(c=>!string.IsNullOrWhiteSpace(c))??"IRR",completedClasses=bookings.Count,totalHours=hours,hourlyRate=hours==0?0:Math.Round(total/(decimal)hours,2),breakdown=rows});}
@@ -87,13 +99,65 @@ public class TeacherDashboardCompatibilityController : ApiControllerBase
     [HttpGet("overview")]
     public async Task<IActionResult> Overview(){var id=RequireUserId();var classes=await GetClasses(id,null,null,null);var students=await StudentsValues(id);var earnings=await EarningsValue(id);var analytics=await AnalyticsValue(id);return Ok(new{classes,students,earnings,analytics});}
     private async Task<object[]> GetClasses(Guid id,string? status,string? startDate,string? endDate){var q=_db.Bookings.AsNoTracking().Include(b=>b.Course).Include(b=>b.Student).Where(b=>b.TeacherId==id).AsQueryable();if(!string.IsNullOrWhiteSpace(startDate)&&DateTime.TryParse(startDate,out var sd))q=q.Where(b=>b.StartTime>=sd);if(!string.IsNullOrWhiteSpace(endDate)&&DateTime.TryParse(endDate,out var ed))q=q.Where(b=>b.StartTime<ed.AddDays(1));var bs=await q.OrderBy(b=>b.StartTime).Take(100).ToListAsync();return bs.Select(b=>new{ id=b.Id,courseId=b.CourseId??Guid.Empty,courseTitle=b.Course?.Title??string.Empty,teacherId=b.TeacherId,subject="",scheduledDate=b.StartTime.ToString("yyyy-MM-dd"),startTime=b.StartTime.ToString("HH:mm"),endTime=b.EndTime.ToString("HH:mm"),studentId=b.StudentId,studentName=b.Student.FullName,studentAvatar=b.Student.AvatarUrl,status=StudentBookingStatus(b.Status,b.StartTime,b.EndTime),type="one_on_one",meetingUrl=(string?)null,notes=(string?)null}).Where(x=>string.IsNullOrWhiteSpace(status)||x.status==status).Cast<object>().ToArray();}
-    private async Task<object[]> StudentsValues(Guid id){var courses=await _db.Set<Course>().Where(c=>c.TeacherId==id).Select(c=>c.Id).ToListAsync();var es=await _db.Set<Enrollment>().Include(e=>e.Student).Include(e=>e.Course).Where(e=>courses.Contains(e.CourseId)).Take(200).ToListAsync();var res=new List<object>();foreach(var e in es){var total=await _db.Lessons.CountAsync(l=>l.CourseModule.CourseId==e.CourseId);var done=await _db.LessonProgress.CountAsync(p=>p.StudentId==e.StudentId&&p.IsCompleted&&p.Lesson.CourseModule.CourseId==e.CourseId);res.Add(new{studentId=e.StudentId,studentName=e.Student.FullName,studentAvatar=e.Student.AvatarUrl,studentEmail=e.Student.Email,courseId=e.CourseId,courseTitle=e.Course.Title,enrolledAt=e.EnrolledAt,progress=total==0?0:Math.Round(done*100d/total,2),completedLessons=done,totalLessons=total,lastActivity=e.EnrolledAt,upcomingClass=(object?)null});}return res.ToArray();}
+    private async Task<object[]> StudentsValues(Guid id)
+    {
+        var courses = await _db.Set<CourseInstanceTeacher>()
+            .Where(x => x.TeacherId == id)
+            .Select(x => x.CourseInstance.CourseId)
+            .Distinct()
+            .ToListAsync();
+
+        var es = await _db.Set<Enrollment>()
+            .Include(e => e.Student)
+            .Include(e => e.Course)
+            .Where(e => courses.Contains(e.CourseId))
+            .Take(200)
+            .ToListAsync();
+
+        var res = new List<object>();
+
+        foreach (var e in es)
+        {
+            var total = await _db.Lessons
+                .CountAsync(l => l.CourseModule.CourseId == e.CourseId);
+
+            var done = await _db.LessonProgress
+                .CountAsync(p =>
+                    p.StudentId == e.StudentId &&
+                    p.IsCompleted &&
+                    p.Lesson.CourseModule.CourseId == e.CourseId);
+
+            res.Add(new
+            {
+                studentId = e.StudentId,
+                studentName = e.Student.FullName,
+                studentAvatar = e.Student.AvatarUrl,
+                studentEmail = e.Student.Email,
+                courseId = e.CourseId,
+                courseTitle = e.Course.Title,
+                enrolledAt = e.EnrolledAt,
+                progress = total == 0
+                    ? 0
+                    : Math.Round(done * 100d / total, 2),
+                completedLessons = done,
+                totalLessons = total,
+                lastActivity = e.EnrolledAt,
+                upcomingClass = (object?)null
+            });
+        }
+
+        return res.ToArray();
+    }
     private async Task<object> EarningsValue(Guid id)=>await BuildEarningsObject(id);
     private async Task<object> AnalyticsValue(Guid id){return await BuildAnalyticsObject(id);}
     private async Task<object> BuildEarningsObject(Guid id){var bs=await _db.Bookings.Include(b=>b.Course).Where(b=>b.TeacherId==id&&b.Status==BookingStatus.Completed&&b.StartTime>=DateTime.UtcNow.AddMonths(-1)).ToListAsync();var hours=bs.Sum(b=>(b.EndTime-b.StartTime).TotalHours);return new{teacherId=id,period="month",totalEarnings=bs.Sum(EarningsForBooking),currency=bs.Select(b=>b.Course?.Currency).FirstOrDefault(c=>!string.IsNullOrWhiteSpace(c))??"IRR",completedClasses=bs.Count,totalHours=Math.Round(hours,2),hourlyRate=hours==0?0:Math.Round(bs.Sum(EarningsForBooking)/(decimal)hours,2),breakdown=Array.Empty<object>()};}
     private async Task<object> BuildAnalyticsObject(Guid id)
     {
-        var courses=await _db.Set<Course>().Where(c=>c.TeacherId==id).Select(c=>c.Id).ToListAsync();
+        var courses = await _db.Set<CourseInstanceTeacher>()
+            .Where(x => x.TeacherId == id)
+            .Select(x => x.CourseInstance.CourseId)
+            .Distinct()
+            .ToListAsync();
         var studentIds=await _db.Set<Enrollment>().Where(e=>courses.Contains(e.CourseId)).Select(e=>e.StudentId).Distinct().ToListAsync();
         var bookings=await _db.Bookings.AsNoTracking().Where(b=>b.TeacherId==id).ToListAsync();
         var completed=bookings.Count(b=>b.Status==BookingStatus.Completed);

@@ -82,8 +82,13 @@ public class EnrollmentService : IEnrollmentService
         if (course is null)
             return new List<CourseEnrollmentStudentDto>();
 
-        if (course.TeacherId != teacherId)
+        if (!await _context.Set<CourseInstanceTeacher>()
+            .AnyAsync(t =>
+                t.TeacherId == teacherId &&
+                t.CourseInstance.CourseId == course.Id))
+        {
             return new List<CourseEnrollmentStudentDto>();
+        }
 
         return await _context.Set<Enrollment>()
             .Where(e => e.CourseId == courseId)

@@ -26,7 +26,12 @@ public class TeacherDashboardService : ITeacherDashboardService
         var profile = await _context.Set<TeacherProfile>().FirstOrDefaultAsync(p => p.TeacherId == teacherId);
 
         // Courses projection with counts
-        var coursesQuery = _context.Set<Course>().Where(c => c.TeacherId == teacherId);
+        var coursesQuery = _context.Set<Course>()
+          .Where(c =>
+              _context.Set<CourseInstanceTeacher>()
+                  .Any(t =>
+                      t.TeacherId == teacherId &&
+                      t.CourseInstance.CourseId == c.Id));
 
         var courses = await coursesQuery
             .OrderByDescending(c => c.CreatedAt)
@@ -50,7 +55,11 @@ public class TeacherDashboardService : ITeacherDashboardService
 
         // total distinct students across teacher courses
         var studentCount = await _context.Set<Domain.Entities.Enrollment>()
-            .Where(e => _context.Set<Course>().Any(c => c.Id == e.CourseId && c.TeacherId == teacherId))
+            .Where(e =>
+                _context.Set<CourseInstanceTeacher>()
+                    .Any(t =>
+                        t.TeacherId == teacherId &&
+                        t.CourseInstance.CourseId == e.CourseId))
             .Select(e => e.StudentId)
             .Distinct()
             .CountAsync();

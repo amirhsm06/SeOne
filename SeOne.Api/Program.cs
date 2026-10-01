@@ -144,6 +144,7 @@ builder.Services.AddScoped<IMessagingService,MessagingService>();
 builder.Services.AddScoped<IPaymentGateway, DevelopmentPaymentGateway>();
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IPracticeService, PracticeService>();
+builder.Services.AddHttpClient<IImageStorageService, SupabaseImageStorageService>();
 
 var app = builder.Build();
 

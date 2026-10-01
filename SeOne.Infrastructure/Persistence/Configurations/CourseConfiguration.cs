@@ -61,9 +61,6 @@ public class CourseConfiguration : IEntityTypeConfiguration<Course>
         builder.HasIndex(x => x.Level);
         builder.HasIndex(x => x.IsFeatured);
 
-        builder.HasOne(x => x.Teacher)
-            .WithMany()
-            .HasForeignKey(x => x.TeacherId)
-            .OnDelete(DeleteBehavior.Restrict);
+
     }
 }

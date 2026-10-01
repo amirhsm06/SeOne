@@ -19,8 +19,14 @@ public class CourseModuleService : ICourseModuleService
     {
         var course = await _context.Set<Course>().FirstOrDefaultAsync(c => c.Id == courseId);
 
-        if (course is null || course.TeacherId != teacherId)
-            return null!; // callers should handle null; keep signature as specified (but returning null will cause runtime NRE if not handled) - adjust to throw or return null via nullable signature? follow spec: return CourseModuleDto, but we'll return null and controller will handle
+        if (course is null ||
+            !await _context.Set<CourseInstanceTeacher>()
+                .AnyAsync(t =>
+                    t.TeacherId == teacherId &&
+                    t.CourseInstance.CourseId == course.Id))
+        {
+            return null!;
+        } // callers should handle null; keep signature as specified (but returning null will cause runtime NRE if not handled) - adjust to throw or return null via nullable signature? follow spec: return CourseModuleDto, but we'll return null and controller will handle
 
         var module = new CourseModule
         {
@@ -60,7 +66,12 @@ public class CourseModuleService : ICourseModuleService
         }
         else if (string.Equals(userRole, "Teacher", StringComparison.OrdinalIgnoreCase))
         {
-            if (course.TeacherId != userId)
+            var hasAccess = await _context.Set<CourseInstanceTeacher>()
+                .AnyAsync(t =>
+                    t.TeacherId == userId &&
+                    t.CourseInstance.CourseId == course.Id);
+
+            if (!hasAccess)
                 return new List<CourseModuleDto>();
         }
         else
@@ -93,8 +104,13 @@ public class CourseModuleService : ICourseModuleService
         if (module is null)
             return null;
 
-        if (module.Course.TeacherId != teacherId)
+        if (!await _context.Set<CourseInstanceTeacher>()
+            .AnyAsync(t =>
+                t.TeacherId == teacherId &&
+                t.CourseInstance.CourseId == module.CourseId))
+        {
             return null;
+        }
 
         module.Title = title;
         module.Description = description;
@@ -122,8 +138,13 @@ public class CourseModuleService : ICourseModuleService
         if (module is null)
             return false;
 
-        if (module.Course.TeacherId != teacherId)
+        if (!await _context.Set<CourseInstanceTeacher>()
+            .AnyAsync(t =>
+                t.TeacherId == teacherId &&
+                t.CourseInstance.CourseId == module.CourseId))
+        {
             return false;
+        }
 
         _context.Set<CourseModule>().Remove(module);
         await _context.SaveChangesAsync();

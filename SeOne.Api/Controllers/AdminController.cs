@@ -117,18 +117,165 @@ public class AdminController : ApiControllerBase
     [HttpDelete("teachers/{id:guid}")]
     public Task<IActionResult> DeleteTeacher(Guid id)=>SoftDelete(id,UserRole.Teacher);
     [HttpGet("teachers/{id:guid}/students")]
-    public async Task<IActionResult> TeacherStudents(Guid id){if(!await _db.Users.AnyAsync(u=>u.Id==id&&u.Role==UserRole.Teacher))return NotFound();var courses=await _db.Set<Course>().Where(c=>c.TeacherId==id).Select(c=>c.Id).ToListAsync();var enrollments=await _db.Set<Enrollment>().Include(e=>e.Student).Include(e=>e.Course).Where(e=>courses.Contains(e.CourseId)).ToListAsync();var result=new List<object>();foreach(var e in enrollments){var p=await ProgressForUserCourse(e.StudentId,e.CourseId);result.Add(new{studentId=e.StudentId,fullName=e.Student.FullName,email=e.Student.Email,courseId=e.CourseId,courseTitle=e.Course.Title,progress=p.progress});}return Ok(result);}
+    public async Task<IActionResult> TeacherStudents(Guid id)
+    {
+        if (!await _db.Users.AnyAsync(u => u.Id == id && u.Role == UserRole.Teacher))
+            return NotFound();
+
+        var courses = await _db.Set<CourseInstanceTeacher>()
+            .Where(x => x.TeacherId == id)
+            .Select(x => x.CourseInstance.CourseId)
+            .Distinct()
+            .ToListAsync();
+
+        var enrollments = await _db.Set<Enrollment>()
+            .Include(e => e.Student)
+            .Include(e => e.Course)
+            .Where(e => courses.Contains(e.CourseId))
+            .ToListAsync();
+
+        var result = new List<object>();
+
+        foreach (var e in enrollments)
+        {
+            var p = await ProgressForUserCourse(e.StudentId, e.CourseId);
+
+            result.Add(new
+            {
+                studentId = e.StudentId,
+                fullName = e.Student.FullName,
+                email = e.Student.Email,
+                courseId = e.CourseId,
+                courseTitle = e.Course.Title,
+                progress = p.progress
+            });
+        }
+
+        return Ok(result);
+    }
     [HttpGet("teachers/{id:guid}/availability")]
     public async Task<IActionResult> TeacherAvailability(Guid id){var slots=await _db.Set<TeacherAvailability>().Where(s=>s.TeacherId==id).OrderBy(s=>s.DayOfWeek).ThenBy(s=>s.StartTime).Select(s=>new{id=s.Id,dayOfWeek=s.DayOfWeek.ToString(),startTime=s.StartTime.ToString(@"hh\:mm"),endTime=s.EndTime.ToString(@"hh\:mm"),isBooked=_db.Set<Booking>().Any(b=>b.TeacherId==id&&b.Status!=BookingStatus.Cancelled&&((b.StartTime.TimeOfDay>=s.StartTime&&b.StartTime.TimeOfDay<s.EndTime)||(b.EndTime.TimeOfDay>s.StartTime&&b.EndTime.TimeOfDay<=s.EndTime))) }).ToListAsync();return Ok(slots);}
     [HttpPut("teachers/{id:guid}/availability")]
     public async Task<IActionResult> SetTeacherAvailability(Guid id,[FromBody] SlotsRequest r){if(!await _db.Users.AnyAsync(u=>u.Id==id&&u.Role==UserRole.Teacher))return NotFound();var existing=await _db.Set<TeacherAvailability>().Where(a=>a.TeacherId==id).ToListAsync();_db.RemoveRange(existing);foreach(var s in r.Slots??new()){if(!Enum.TryParse<DayOfWeek>(s.DayOfWeek,true,out var day))continue;if(!TimeSpan.TryParse(s.StartTime,CultureInfo.InvariantCulture,out var start)||!TimeSpan.TryParse(s.EndTime,CultureInfo.InvariantCulture,out var end)||end<=start)continue;_db.Add(new TeacherAvailability{Id=Guid.NewGuid(),TeacherId=id,DayOfWeek=day,StartTime=start,EndTime=end,IsAvailable=true,CreatedAt=DateTime.UtcNow});}await _db.SaveChangesAsync();var slots=await _db.Set<TeacherAvailability>().Where(a=>a.TeacherId==id).OrderBy(a=>a.DayOfWeek).ThenBy(a=>a.StartTime).Select(a=>new{id=a.Id,dayOfWeek=a.DayOfWeek.ToString(),startTime=a.StartTime.ToString(@"hh\:mm"),endTime=a.EndTime.ToString(@"hh\:mm"),isBooked=false}).ToListAsync();return Ok(new{slots});}
 
     [HttpGet("courses")]
-    public async Task<IActionResult> Courses(){var list=await _db.Set<Course>().AsNoTracking().OrderByDescending(c=>c.CreatedAt).Select(c=>new{id=c.Id,title=c.Title,level=c.Level,basePrice=c.Price,currency=c.Currency,discountPercent=c.DiscountPercent,isPublished=c.IsPublished,studentCount=_db.Set<Enrollment>().Count(e=>e.CourseId==c.Id),lessonCount=_db.Set<Lesson>().Count(l=>l.CourseModule.CourseId==c.Id)}).ToListAsync();return Ok(list);}
+    public async Task<IActionResult> Courses()
+    {
+        var list = await _db.Set<Course>().AsNoTracking().OrderByDescending(c => c.CreatedAt).Select(c => new
+        {
+            id = c.Id,
+            title = c.Title,
+            description = c.Description,
+            level = c.Level,
+            basePrice = c.Price,
+            currency = c.Currency,
+            discountPercent = c.DiscountPercent,
+            duration = c.Duration,
+            category = c.Category,
+            language = c.Language,
+            isFeatured = c.IsFeatured,
+            isPublished = c.IsPublished,
+            imageUrl = c.ImageUrl ?? string.Empty,
+            studentCount = _db.Set<Enrollment>().Count(e => e.CourseId == c.Id),
+            lessonCount = _db.Set<Lesson>().Count(l => l.CourseModule.CourseId == c.Id),
+            instancesCount = _db.Set<CourseInstance>().Count(i => i.CourseId == c.Id),
+            createdAt = c.CreatedAt
+        }).ToListAsync();
+
+        return Ok(list);
+    }
     [HttpPatch("courses/{id:guid}/pricing")]
     public async Task<IActionResult> CoursePricing(Guid id,[FromBody] JsonElement body){var c=await _db.Set<Course>().FindAsync(id);if(c is null)return NotFound();SetDecimal(body,"basePrice",v=>c.Price=v);SetDecimal(body,"discountPercent",v=>c.DiscountPercent=Math.Clamp(v,0,100));SetIfString(body,"currency",v=>c.Currency=v);await _db.SaveChangesAsync();return await CourseResult(c.Id);}
+    [HttpPost("courses")]
+    public async Task<IActionResult> CreateCourse([FromBody] JsonElement body)
+    {
+        var title = GetString(body, "title");
+        if (string.IsNullOrWhiteSpace(title)) return BadRequest(new { message = "title is required." });
+
+        var currency = GetString(body, "currency");
+        if (string.IsNullOrWhiteSpace(currency)) return BadRequest(new { message = "currency is required." });
+
+        var category = GetString(body, "category");
+        if (string.IsNullOrWhiteSpace(category)) return BadRequest(new { message = "category is required." });
+
+        var language = GetString(body, "language");
+        if (string.IsNullOrWhiteSpace(language)) return BadRequest(new { message = "language is required." });
+
+        decimal basePrice = 0;
+        if (body.TryGetProperty("basePrice", out var bp) && bp.ValueKind == JsonValueKind.Number && bp.TryGetDecimal(out var bpv)) basePrice = bpv;
+        if (basePrice < 0) return BadRequest(new { message = "basePrice must be >= 0." });
+
+        decimal discount = 0;
+        if (body.TryGetProperty("discountPercent", out var dp) && dp.ValueKind == JsonValueKind.Number && dp.TryGetDecimal(out var dpv)) discount = dpv;
+        if (discount < 0 || discount > 100) return BadRequest(new { message = "discountPercent must be between 0 and 100." });
+
+        var c = new Course
+        {
+            Id = Guid.NewGuid(),
+            Title = title!.Trim(),
+            Description = GetString(body, "description") ?? string.Empty,
+            Level = GetString(body, "level") ?? string.Empty,
+            Price = basePrice,
+            Currency = currency!.Trim(),
+            Duration = GetString(body, "duration"),
+            ImageUrl = GetString(body, "imageUrl"),
+            Category = category!.Trim(),
+            Language = language!.Trim(),
+            IsFeatured = GetBool(body, "isFeatured"),
+            IsPublished = GetBool(body, "isPublished"),
+            DiscountPercent = discount,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        _db.Add(c);
+        await _db.SaveChangesAsync();
+
+        var created = await _db.Set<Course>().AsNoTracking().Where(x => x.Id == c.Id).Select(x => new
+        {
+            id = x.Id,
+            title = x.Title,
+            description = x.Description,
+            level = x.Level,
+            basePrice = x.Price,
+            currency = x.Currency,
+            discountPercent = x.DiscountPercent,
+            duration = x.Duration,
+            category = x.Category,
+            language = x.Language,
+            isFeatured = x.IsFeatured,
+            isPublished = x.IsPublished,
+            imageUrl = x.ImageUrl ?? string.Empty,
+            studentCount = _db.Set<Enrollment>().Count(e => e.CourseId == x.Id),
+            lessonCount = _db.Set<Lesson>().Count(l => l.CourseModule.CourseId == x.Id),
+            instancesCount = _db.Set<CourseInstance>().Count(i => i.CourseId == x.Id),
+            createdAt = x.CreatedAt
+        }).FirstAsync();
+
+        return Created($"/api/admin/courses/{c.Id}", created);
+    }
+
     [HttpPatch("courses/{id:guid}")]
-    public async Task<IActionResult> UpdateCourse(Guid id,[FromBody] JsonElement body){var c=await _db.Set<Course>().FindAsync(id);if(c is null)return NotFound();SetIfString(body,"title",v=>c.Title=v);SetIfString(body,"level",v=>c.Level=v);SetIfBool(body,"isPublished",v=>c.IsPublished=v);await _db.SaveChangesAsync();return await CourseResult(c.Id);}
+    public async Task<IActionResult> UpdateCourse(Guid id,[FromBody] JsonElement body)
+    {
+        var c = await _db.Set<Course>().FindAsync(id);
+        if (c is null) return NotFound();
+
+        SetIfString(body, "title", v => c.Title = v);
+        SetIfString(body, "description", v => c.Description = v);
+        SetIfString(body, "level", v => c.Level = v);
+        SetDecimal(body, "basePrice", v => { if (v < 0) throw new InvalidOperationException("basePrice must be >= 0."); c.Price = v; });
+        SetIfString(body, "currency", v => c.Currency = v);
+        SetDecimal(body, "discountPercent", v => c.DiscountPercent = Math.Clamp(v, 0, 100));
+        SetIfString(body, "duration", v => c.Duration = v);
+        SetIfString(body, "category", v => c.Category = v);
+        SetIfString(body, "language", v => c.Language = v);
+        SetIfBool(body, "isFeatured", v => c.IsFeatured = v);
+        SetIfBool(body, "isPublished", v => c.IsPublished = v);
+        SetIfString(body, "imageUrl", v => c.ImageUrl = v);
+
+        await _db.SaveChangesAsync();
+        return await CourseResult(c.Id);
+    }
     [HttpGet("courses/{courseId:guid}/modules")]
     public async Task<IActionResult> CourseModules(Guid courseId){return Ok(await _db.Set<CourseModule>().Where(m=>m.CourseId==courseId).OrderBy(m=>m.Order).Select(m=>new{id=m.Id,title=m.Title,description=m.Description,order=m.Order}).ToListAsync());}
     [HttpPost("courses/{courseId:guid}/modules")]
@@ -304,7 +451,29 @@ public class AdminController : ApiControllerBase
     private async Task<(double progress,int completed,int total,DateTime last)> ProgressForUserCourse(Guid userId,Guid courseId){var total=await _db.Set<Lesson>().CountAsync(l=>l.CourseModule.CourseId==courseId);var completed=await _db.Set<LessonProgress>().CountAsync(p=>p.StudentId==userId&&p.IsCompleted&&p.Lesson.CourseModule.CourseId==courseId);var last=await _db.Set<LessonProgress>().Where(p=>p.StudentId==userId&&p.Lesson.CourseModule.CourseId==courseId&&p.LastAccessedAt!=null).OrderByDescending(p=>p.LastAccessedAt).Select(p=>p.LastAccessedAt!.Value).FirstOrDefaultAsync();return(total==0?0:Math.Round(completed*100d/total,2),completed,total,last);}
     private async Task<Dictionary<string,string>> ReadSettings(){var entities=await ReadSettingEntities();var map=entities.ToDictionary(s=>s.Key,s=>s.Value,StringComparer.OrdinalIgnoreCase);return new Dictionary<string,string>{["siteName"]=map.GetValueOrDefault("siteName","SE ONE"),["supportEmail"]=map.GetValueOrDefault("supportEmail","support@seone.com"),["defaultLocale"]=map.GetValueOrDefault("defaultLocale","fa"),["maintenanceMode"]=map.GetValueOrDefault("maintenanceMode","false"),["allowRegistration"]=map.GetValueOrDefault("allowRegistration","true")};}
     private Task<List<SiteSetting>> ReadSettingEntities()=>_db.Set<SiteSetting>().ToListAsync();
-    private async Task<IActionResult> CourseResult(Guid id){return Ok(await _db.Set<Course>().Where(c=>c.Id==id).Select(c=>new{id=c.Id,title=c.Title,level=c.Level,basePrice=c.Price,currency=c.Currency,discountPercent=c.DiscountPercent,isPublished=c.IsPublished,studentCount=_db.Set<Enrollment>().Count(e=>e.CourseId==c.Id),lessonCount=_db.Set<Lesson>().Count(l=>l.CourseModule.CourseId==c.Id)}).FirstAsync());}
+    private async Task<IActionResult> CourseResult(Guid id)
+    {
+        return Ok(await _db.Set<Course>().AsNoTracking().Where(c => c.Id == id).Select(c => new
+        {
+            id = c.Id,
+            title = c.Title,
+            description = c.Description,
+            level = c.Level,
+            basePrice = c.Price,
+            currency = c.Currency,
+            discountPercent = c.DiscountPercent,
+            duration = c.Duration,
+            category = c.Category,
+            language = c.Language,
+            isFeatured = c.IsFeatured,
+            isPublished = c.IsPublished,
+            imageUrl = c.ImageUrl ?? string.Empty,
+            studentCount = _db.Set<Enrollment>().Count(e => e.CourseId == c.Id),
+            lessonCount = _db.Set<Lesson>().Count(l => l.CourseModule.CourseId == c.Id),
+            instancesCount = _db.Set<CourseInstance>().Count(i => i.CourseId == c.Id),
+            createdAt = c.CreatedAt
+        }).FirstAsync());
+    }
     private static object MapStudent(User u,int courses)=>new{id=u.Id,fullName=u.FullName,email=u.Email,avatarUrl=u.AvatarUrl??string.Empty,joinedAt=u.CreatedAt,status=u.AccountStatus,coursesEnrolled=courses};
     private static object MapTeacher(User u,TeacherProfile? p)=>new{id=u.Id,userId=u.Id,fullName=u.FullName,email=u.Email,avatarUrl=p?.Avatar??u.AvatarUrl??string.Empty,teachingLanguage=p?.TeachingLanguage??"english",subject=p?.Subject??string.Empty,level=p?.Level??string.Empty,rating=p?.Rating??0,bio=p?.Bio??u.Bio??string.Empty,status=u.AccountStatus};
     private static object MapBlog(BlogPost b)=>new{id=b.Id,title=b.Title,excerpt=b.Excerpt,content=b.Content,author=b.Author,category=b.Category,status=b.IsPublished?"published":"draft",publishedAt=b.IsPublished?b.CreatedAt:(DateTime?)null,readTimeMinutes=ParseReadTime(b.ReadTime),imageUrl=b.ImageUrl??string.Empty,views=0,lang=b.Language};

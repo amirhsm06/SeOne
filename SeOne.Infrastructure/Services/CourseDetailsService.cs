@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using SeOne.Application.DTOs;
 using SeOne.Application.Interfaces;
+using SeOne.Domain.Entities;
 using SeOne.Infrastructure.Persistence;
 
 namespace SeOne.Infrastructure.Services;
@@ -18,19 +19,32 @@ public class CourseDetailsService : ICourseDetailsService
     {
         // Load basic course and teacher
         var courseQuery = _context.Set<Domain.Entities.Course>().AsQueryable();
-
         var course = await courseQuery
-            .Include(c => c.Teacher)
             .FirstOrDefaultAsync(c => c.Id == courseId);
+
+        var teacher = course is null
+            ? null
+            : await _context.Set<CourseInstanceTeacher>()
+                .Where(t => t.CourseInstance.CourseId == course.Id)
+                .OrderBy(t => t.CourseInstance.CreatedAt)
+                .ThenBy(t => t.CreatedAt)
+                .Select(t => t.Teacher)
+                .FirstOrDefaultAsync();
 
         if (course is null)
             return null; // not found
 
         // determine visibility
         bool isOwner = false;
-        if (!string.IsNullOrEmpty(userRole) && string.Equals(userRole, "Teacher", StringComparison.OrdinalIgnoreCase) && userId.HasValue)
+
+        if (!string.IsNullOrEmpty(userRole) &&
+            string.Equals(userRole, "Teacher", StringComparison.OrdinalIgnoreCase) &&
+            userId.HasValue)
         {
-            isOwner = course.TeacherId == userId.Value;
+            isOwner = await _context.Set<CourseInstanceTeacher>()
+                .AnyAsync(t =>
+                    t.TeacherId == userId.Value &&
+                    t.CourseInstance.CourseId == course.Id);
         }
 
         if (!course.IsPublished && !isOwner)
@@ -49,20 +63,23 @@ public class CourseDetailsService : ICourseDetailsService
             Price = course.Price,
             Duration = course.Duration,
             ImageUrl = course.ImageUrl,
-            TeacherId = course.TeacherId,
-            TeacherName = course.Teacher?.FullName ?? string.Empty,
+            TeacherId = teacher?.Id ?? Guid.Empty,
+            TeacherName = teacher?.FullName ?? string.Empty,
             TotalModuleCount = await _context.Set<Domain.Entities.CourseModule>().CountAsync(m => m.CourseId == course.Id),
             TotalLessonCount = await _context.Set<Domain.Entities.Lesson>().CountAsync(l => l.CourseModule.CourseId == course.Id)
         };
 
         // teacher profile summary
-        var profile = await _context.Set<Domain.Entities.TeacherProfile>().FirstOrDefaultAsync(p => p.TeacherId == course.TeacherId);
+        var profile = teacher is null
+     ? null
+     : await _context.Set<Domain.Entities.TeacherProfile>()
+         .FirstOrDefaultAsync(p => p.TeacherId == teacher.Id);
         if (profile is not null)
         {
             dto.TeacherProfile = new TeacherProfileSummaryDto
             {
                 TeacherId = profile.TeacherId,
-                FullName = course.Teacher?.FullName ?? string.Empty,
+                FullName = teacher?.FullName ?? string.Empty,
                 Avatar = profile.Avatar,
                 TeachingLanguage = profile.TeachingLanguage,
                 Subject = profile.Subject,

@@ -42,7 +42,10 @@ public class AssignmentService : IAssignmentService
         var course = await _context.Set<Course>()
             .FirstOrDefaultAsync(x =>
                 x.Id == request.CourseId &&
-                x.TeacherId == teacherId);
+                _context.Set<CourseInstanceTeacher>()
+                    .Any(t =>
+                        t.TeacherId == teacherId &&
+                        t.CourseInstance.CourseId == x.Id));
 
         if (course is null)
         {

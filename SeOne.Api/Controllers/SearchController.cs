@@ -27,7 +27,14 @@ public class SearchController : ControllerBase
         if (!string.IsNullOrWhiteSpace(language)) query = query.Where(c => c.Language == language);
         if (minPrice.HasValue) query = query.Where(c => c.Price >= minPrice.Value);
         if (maxPrice.HasValue) query = query.Where(c => c.Price <= maxPrice.Value);
-        if (teacherId.HasValue) query = query.Where(c => c.TeacherId == teacherId.Value);
+        if (teacherId.HasValue)
+        {
+            query = query.Where(c =>
+                _db.Set<CourseInstanceTeacher>()
+                    .Any(t =>
+                        t.TeacherId == teacherId.Value &&
+                        t.CourseInstance.CourseId == c.Id));
+        }
         if (hasDiscount == true) query = query.Where(c => c.DiscountPercent > 0);
         if (featured == true) query = query.Where(c => c.IsFeatured);
         if (minRating.HasValue) query = query.Where(c => _db.Set<Review>().Where(r => r.CourseId == c.Id).Select(r => (double?)r.Rating).Average() >= (double)minRating.Value);
@@ -51,7 +58,17 @@ public class SearchController : ControllerBase
             basePrice = c.Price, price = c.Price * (1m - c.DiscountPercent / 100m), currency = c.Currency,
             duration = c.Duration, image = c.ImageUrl, category = c.Category, language = c.Language,
             discountPercent = c.DiscountPercent, featured = c.IsFeatured,
-            teacher = new { id = c.TeacherId, name = c.Teacher.FullName, avatar = c.Teacher.AvatarUrl },
+            teacher = _db.Set<CourseInstanceTeacher>()
+    .Where(t => t.CourseInstance.CourseId == c.Id)
+    .OrderBy(t => t.CourseInstance.CreatedAt)
+    .ThenBy(t => t.CreatedAt)
+    .Select(t => new
+    {
+        id = t.TeacherId,
+        name = t.Teacher.FullName,
+        avatar = t.Teacher.AvatarUrl
+    })
+    .FirstOrDefault(),
             rating = _db.Set<Review>().Where(r => r.CourseId == c.Id).Select(r => (double?)r.Rating).Average() ?? 0,
             reviewCount = _db.Set<Review>().Count(r => r.CourseId == c.Id)
         }).ToListAsync();
@@ -84,7 +101,25 @@ public class SearchController : ControllerBase
         var levels = await courses.GroupBy(c => c.Level).Select(g => new { value = g.Key, label = g.Key, count = g.Count() }).ToListAsync();
         var categories = await courses.GroupBy(c => c.Category).Select(g => new { value = g.Key, label = g.Key, count = g.Count() }).ToListAsync();
         var languages = await courses.GroupBy(c => c.Language).Select(g => new { value = g.Key, label = g.Key, count = g.Count() }).ToListAsync();
-        var teachers = await courses.GroupBy(c => new { c.TeacherId, c.Teacher.FullName, c.Teacher.AvatarUrl }).Select(g => new { id = g.Key.TeacherId, name = g.Key.FullName, avatar = g.Key.AvatarUrl }).ToListAsync();
+        var teachers = await _db.Set<CourseInstanceTeacher>()
+    .Where(t =>
+        t.CourseInstance.Course.IsPublished &&
+        (string.IsNullOrWhiteSpace(lang) ||
+         t.CourseInstance.Course.Language == lang ||
+         t.CourseInstance.Course.Language == "en"))
+    .GroupBy(t => new
+    {
+        t.TeacherId,
+        t.Teacher.FullName,
+        t.Teacher.AvatarUrl
+    })
+    .Select(g => new
+    {
+        id = g.Key.TeacherId,
+        name = g.Key.FullName,
+        avatar = g.Key.AvatarUrl
+    })
+    .ToListAsync();
         return Ok(new { levels, categories, languages, teachers, priceRanges = new[] { new { label = "Free", min = 0m, max = 0m }, new { label = "Under 1M", min = 1m, max = 999999m }, new { label = "1M+", min = 1000000m, max = decimal.MaxValue } } });
     }
 
@@ -125,7 +160,17 @@ public class SearchController : ControllerBase
         basePrice = c.Price, price = c.Price * (1m - c.DiscountPercent / 100m), currency = c.Currency,
         duration = c.Duration, image = c.ImageUrl, category = c.Category, language = c.Language,
         discountPercent = c.DiscountPercent, featured = c.IsFeatured,
-        teacher = new { id = c.TeacherId, name = c.Teacher.FullName, avatar = c.Teacher.AvatarUrl },
+        teacher = _db.Set<CourseInstanceTeacher>()
+    .Where(t => t.CourseInstance.CourseId == c.Id)
+    .OrderBy(t => t.CourseInstance.CreatedAt)
+    .ThenBy(t => t.CreatedAt)
+    .Select(t => new
+    {
+        id = t.TeacherId,
+        name = t.Teacher.FullName,
+        avatar = t.Teacher.AvatarUrl
+    })
+    .FirstOrDefault(),
         rating = _db.Set<Review>().Where(r => r.CourseId == c.Id).Select(r => (double?)r.Rating).Average() ?? 0,
         reviewCount = _db.Set<Review>().Count(r => r.CourseId == c.Id)
     });

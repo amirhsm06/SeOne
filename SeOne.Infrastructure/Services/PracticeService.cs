@@ -30,7 +30,11 @@ public class PracticeService : IPracticeService
     {
         var query = BuildPracticeContentQuery();
 
-        query = query.Where(x => x.Course.TeacherId == teacherId);
+        query = query.Where(x =>
+        _context.Set<CourseInstanceTeacher>()
+            .Any(t =>
+                t.TeacherId == teacherId &&
+                t.CourseInstance.CourseId == x.CourseId));
 
         query = ApplyFilters(
             query,
@@ -93,7 +97,10 @@ public class PracticeService : IPracticeService
         var practice = await BuildPracticeContentQuery()
             .Where(x =>
                 x.Id == practiceId &&
-                x.Course.TeacherId == teacherId)
+                _context.Set<CourseInstanceTeacher>()
+                    .Any(t =>
+                        t.TeacherId == teacherId &&
+                        t.CourseInstance.CourseId == x.CourseId))
             .FirstOrDefaultAsync();
 
         return practice is null
@@ -143,7 +150,10 @@ public class PracticeService : IPracticeService
         var course = await _context.Set<Course>()
             .FirstOrDefaultAsync(x =>
                 x.Id == request.CourseId &&
-                x.TeacherId == teacherId);
+                _context.Set<CourseInstanceTeacher>()
+                    .Any(t =>
+                        t.TeacherId == teacherId &&
+                        t.CourseInstance.CourseId == x.Id));
 
         if (course is null)
             return null;
@@ -212,7 +222,10 @@ public class PracticeService : IPracticeService
             .Include(x => x.Questions)
             .FirstOrDefaultAsync(x =>
                 x.Id == practiceId &&
-                x.Course.TeacherId == teacherId);
+                _context.Set<CourseInstanceTeacher>()
+                    .Any(t =>
+                        t.TeacherId == teacherId &&
+                        t.CourseInstance.CourseId == x.CourseId));
 
         if (practice is null)
             return null;
@@ -277,7 +290,10 @@ public class PracticeService : IPracticeService
             var ownsCourse = await _context.Set<Course>()
                 .AnyAsync(x =>
                     x.Id == targetCourseId &&
-                    x.TeacherId == teacherId);
+                    _context.Set<CourseInstanceTeacher>()
+                        .Any(t =>
+                            t.TeacherId == teacherId &&
+                            t.CourseInstance.CourseId == x.Id));
 
             if (!ownsCourse)
                 return null;
@@ -384,7 +400,10 @@ public class PracticeService : IPracticeService
         var ownsPractice = await _context.Set<Practice>()
             .AnyAsync(x =>
                 x.Id == practiceId &&
-                x.Course.TeacherId == teacherId);
+                _context.Set<CourseInstanceTeacher>()
+                    .Any(t =>
+                        t.TeacherId == teacherId &&
+                        t.CourseInstance.CourseId == x.CourseId));
 
         if (!ownsPractice)
             return false;

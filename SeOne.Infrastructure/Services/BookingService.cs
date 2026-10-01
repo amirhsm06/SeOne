@@ -83,8 +83,11 @@ public class BookingService : IBookingService
         {
             var validCourse = await _context.Set<Course>().AnyAsync(c =>
                 c.Id == courseId.Value &&
-                c.TeacherId == request.TeacherId &&
-                c.IsPublished);
+                c.IsPublished &&
+                _context.Set<CourseInstanceTeacher>()
+                    .Any(t =>
+                        t.TeacherId == request.TeacherId &&
+                        t.CourseInstance.CourseId == c.Id));
 
             if (!validCourse)
                 return null;
@@ -100,8 +103,11 @@ public class BookingService : IBookingService
             courseId = await _context.Set<Enrollment>()
                 .Where(e =>
                     e.StudentId == studentId &&
-                    e.Course.TeacherId == request.TeacherId &&
-                    e.Course.IsPublished)
+                    e.Course.IsPublished &&
+                    _context.Set<CourseInstanceTeacher>()
+                        .Any(t =>
+                            t.TeacherId == request.TeacherId &&
+                            t.CourseInstance.CourseId == e.CourseId))
                 .OrderByDescending(e => e.EnrolledAt)
                 .Select(e => (Guid?)e.CourseId)
                 .FirstOrDefaultAsync();
