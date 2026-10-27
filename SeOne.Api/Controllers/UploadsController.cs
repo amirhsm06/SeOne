@@ -17,6 +17,7 @@ public class UploadsController : ControllerBase
     }
 
     [HttpPost("course-image")]
+    [HttpPost("~/api/admin/courses/upload-image")]
     [RequestSizeLimit(6 * 1024 * 1024)]
     [Authorize(Roles = "Admin,Teacher")]
     public async Task<IActionResult> UploadCourseImage(

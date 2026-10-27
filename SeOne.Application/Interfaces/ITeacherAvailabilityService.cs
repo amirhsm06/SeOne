@@ -15,4 +15,6 @@ public interface ITeacherAvailabilityService
     Task<bool> DeleteAsync(Guid id, Guid teacherId);
 
     Task DeleteAllAsync(Guid teacherId);
+
+    Task<List<TeacherAvailabilityDto>?> ReplaceAvailabilityAsync(Guid teacherId, IReadOnlyCollection<TeacherAvailabilityReplacementSlotDto> slots);
 }

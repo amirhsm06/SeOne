@@ -39,7 +39,22 @@ public class AdminController : ApiControllerBase
     [HttpGet("students/{id:guid}")]
     public Task<IActionResult> Student(Guid id)=>GetUser(id,UserRole.Student);
     [HttpPost("students")]
-    public async Task<IActionResult> CreateStudent([FromBody] AdminCreateUserRequest r){return await CreateUser(r,UserRole.Student,"active");}
+    public async Task<IActionResult> CreateStudent([FromBody] JsonElement body)
+    {
+        var r = ReadCreateUser(body);
+
+        return await CreateUser(
+            new AdminCreateUserRequest
+            {
+                FirstName = r.firstName,
+                FamilyName = r.familyName,
+                Email = r.email,
+                Password = r.password,
+                SendWelcomeEmail = r.sendWelcome
+            },
+            UserRole.Student,
+            "active");
+    }
     [HttpPatch("students/{id:guid}")]
     public Task<IActionResult> UpdateStudent(Guid id,[FromBody] JsonElement body)=>UpdateUser(id,UserRole.Student,body);
     [HttpPatch("students/{id:guid}/status")]
@@ -86,10 +101,7 @@ public class AdminController : ApiControllerBase
     {
         var u = await _users.FindByIdAsync(id.ToString());
         if (u is null || u.Role != UserRole.Teacher) return NotFound();
-        SetIfString(body, "firstName", v => u.FirstName = v.Trim());
-        SetIfString(body, "familyName", v => u.FamilyName = v.Trim());
-
-        u.FullName = $"{u.FirstName} {u.FamilyName}".Trim();
+        ApplyNameUpdate(u, body);
         SetIfString(body, "avatarUrl", v => u.AvatarUrl = v);
         SetIfString(body, "bio", v => u.Bio = v);
         var profile = await _db.Set<TeacherProfile>().FirstOrDefaultAsync(p => p.TeacherId == id);
@@ -401,10 +413,7 @@ public class AdminController : ApiControllerBase
         if (user is null || user.Role != role)
             return NotFound();
 
-        SetIfString(body, "firstName", value => user.FirstName = value.Trim());
-        SetIfString(body, "familyName", value => user.FamilyName = value.Trim());
-
-        user.FullName = $"{user.FirstName} {user.FamilyName}".Trim();
+        ApplyNameUpdate(user, body);
 
         SetIfString(body, "avatarUrl", value => user.AvatarUrl = value);
 
@@ -474,6 +483,51 @@ public class AdminController : ApiControllerBase
             createdAt = c.CreatedAt
         }).FirstAsync());
     }
+    private static void ApplyNameUpdate(User user, JsonElement body)
+    {
+        var hasFirstName =
+            body.TryGetProperty("firstName", out var firstNameElement) &&
+            firstNameElement.ValueKind == JsonValueKind.String;
+
+        var hasFamilyName =
+            body.TryGetProperty("familyName", out var familyNameElement) &&
+            familyNameElement.ValueKind == JsonValueKind.String;
+
+        if (hasFirstName)
+            user.FirstName = firstNameElement.GetString()?.Trim() ?? string.Empty;
+
+        if (hasFamilyName)
+            user.FamilyName = familyNameElement.GetString()?.Trim() ?? string.Empty;
+
+        // Backward compatibility with the frontend's existing fullName payload.
+        if (!hasFirstName &&
+            !hasFamilyName &&
+            body.TryGetProperty("fullName", out var fullNameElement) &&
+            fullNameElement.ValueKind == JsonValueKind.String)
+        {
+            var fullName = fullNameElement.GetString();
+
+            if (!string.IsNullOrWhiteSpace(fullName))
+            {
+                var parts = fullName.Split(
+                    (char[]?)null,
+                    StringSplitOptions.RemoveEmptyEntries);
+
+                if (parts.Length == 1)
+                {
+                    user.FirstName = parts[0];
+                    user.FamilyName = string.Empty;
+                }
+                else if (parts.Length > 1)
+                {
+                    user.FirstName = string.Join(" ", parts[..^1]);
+                    user.FamilyName = parts[^1];
+                }
+            }
+        }
+
+        user.FullName = $"{user.FirstName} {user.FamilyName}".Trim();
+    }
     private static object MapStudent(User u,int courses)=>new{id=u.Id,fullName=u.FullName,email=u.Email,avatarUrl=u.AvatarUrl??string.Empty,joinedAt=u.CreatedAt,status=u.AccountStatus,coursesEnrolled=courses};
     private static object MapTeacher(User u,TeacherProfile? p)=>new{id=u.Id,userId=u.Id,fullName=u.FullName,email=u.Email,avatarUrl=p?.Avatar??u.AvatarUrl??string.Empty,teachingLanguage=p?.TeachingLanguage??"english",subject=p?.Subject??string.Empty,level=p?.Level??string.Empty,rating=p?.Rating??0,bio=p?.Bio??u.Bio??string.Empty,status=u.AccountStatus};
     private static object MapBlog(BlogPost b)=>new{id=b.Id,title=b.Title,excerpt=b.Excerpt,content=b.Content,author=b.Author,category=b.Category,status=b.IsPublished?"published":"draft",publishedAt=b.IsPublished?b.CreatedAt:(DateTime?)null,readTimeMinutes=ParseReadTime(b.ReadTime),imageUrl=b.ImageUrl??string.Empty,views=0,lang=b.Language};
@@ -486,16 +540,49 @@ public class AdminController : ApiControllerBase
     private static void ApplyBlog(BlogPost b,JsonElement body){SetIfString(body,"title",v=>b.Title=v);SetIfString(body,"excerpt",v=>b.Excerpt=v);SetIfString(body,"content",v=>b.Content=v);SetIfString(body,"body",v=>b.Content=v);SetIfString(body,"author",v=>b.Author=v);SetIfString(body,"category",v=>b.Category=v);SetIfString(body,"imageUrl",v=>b.ImageUrl=v);SetIfString(body,"lang",v=>b.Language=v);SetIfString(body,"language",v=>b.Language=v);SetIfString(body,"readTime",v=>b.ReadTime=v);if(body.TryGetProperty("isPublished",out var p)&&(p.ValueKind==System.Text.Json.JsonValueKind.True||p.ValueKind==System.Text.Json.JsonValueKind.False))b.IsPublished=p.GetBoolean();}
     private async Task SetTeacherProfileField(Guid teacherId,Action<TeacherProfile> setter){var p=await _db.Set<TeacherProfile>().FirstOrDefaultAsync(p=>p.TeacherId==teacherId);if(p is null){p=new TeacherProfile{Id=Guid.NewGuid(),TeacherId=teacherId};_db.Add(p);}setter(p);}
     private static (
-    string firstName,
-    string familyName,
-    string email,
-    string password,
-    bool sendWelcome
-) ReadCreateUser(JsonElement body)
+        string firstName,
+        string familyName,
+        string email,
+        string password,
+        bool sendWelcome
+    ) ReadCreateUser(JsonElement body)
     {
+        var fullName = GetString(body, "fullName")?.Trim() ?? "";
+
+        var firstName = GetString(body, "firstName")?.Trim() ?? "";
+        var familyName = GetString(body, "familyName")?.Trim() ?? "";
+
+        if (string.IsNullOrWhiteSpace(firstName) &&
+            !string.IsNullOrWhiteSpace(fullName))
+        {
+            var separator = fullName.IndexOf(' ');
+
+            if (separator < 0)
+            {
+                firstName = fullName;
+            }
+            else
+            {
+                firstName = fullName[..separator].Trim();
+                familyName = fullName[(separator + 1)..].Trim();
+            }
+        }
+        else if (string.IsNullOrWhiteSpace(familyName) &&
+                 !string.IsNullOrWhiteSpace(fullName) &&
+                 !string.IsNullOrWhiteSpace(firstName))
+        {
+            if (fullName.StartsWith(
+                    firstName,
+                    StringComparison.OrdinalIgnoreCase) &&
+                fullName.Length > firstName.Length)
+            {
+                familyName = fullName[firstName.Length..].Trim();
+            }
+        }
+
         return (
-            GetString(body, "firstName") ?? "",
-            GetString(body, "familyName") ?? "",
+            firstName,
+            familyName,
             GetString(body, "email") ?? "",
             GetString(body, "password") ?? "",
             GetBool(body, "sendWelcomeEmail")

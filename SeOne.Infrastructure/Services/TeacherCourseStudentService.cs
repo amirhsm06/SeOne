@@ -62,7 +62,7 @@ public class TeacherCourseStudentService : ITeacherCourseStudentService
         {
             StudentId = item.StudentId,
             FullName = item.StudentFullName,
-            Email = item.StudentEmail,
+            Email = item.StudentEmail ?? string.Empty,
             EnrolledAt = item.EnrolledAt,
             TotalLessons = totalLessons,
             CompletedLessons = item.CompletedLessons,

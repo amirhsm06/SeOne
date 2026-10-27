@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using SeOne.Application.Interfaces;
 
 namespace SeOne.Infrastructure.Services;
@@ -19,17 +19,12 @@ public sealed class LoggingEmailSender : IEmailSender
         string resetToken,
         CancellationToken cancellationToken = default)
     {
-        _logger.LogInformation(
-            """
-            SE ONE password reset requested.
-            Email: {Email}
-            FullName: {FullName}
-            Reset Token: {ResetToken}
-            """,
-            email,
-            fullName,
-            resetToken);
+        cancellationToken.ThrowIfCancellationRequested();
 
-        return Task.CompletedTask;
+        _logger.LogWarning(
+            "Password-reset email delivery is not configured; no email was sent.");
+
+        throw new SeOne.Application.Exceptions.DeliveryNotConfiguredException(
+            "Password-reset email delivery is not configured.");
     }
 }

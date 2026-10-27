@@ -143,6 +143,87 @@ public class TeacherAvailabilityService : ITeacherAvailabilityService
         return true;
     }
 
+    public async Task<List<TeacherAvailabilityDto>?> ReplaceAvailabilityAsync(Guid teacherId, IReadOnlyCollection<TeacherAvailabilityReplacementSlotDto> slots)
+    {
+        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == teacherId && u.Role == UserRole.Teacher);
+        if (user is null || slots is null)
+            return null;
+
+        var dayLength = TimeSpan.FromDays(1);
+        if (slots.Any(slot =>
+                !Enum.IsDefined(slot.DayOfWeek) ||
+                slot.StartTime < TimeSpan.Zero || slot.StartTime >= dayLength ||
+                slot.EndTime <= slot.StartTime || slot.EndTime >= dayLength))
+            return null;
+
+        if (slots.Where(slot => slot.Id.HasValue).Select(slot => slot.Id).Distinct().Count() != slots.Count(slot => slot.Id.HasValue))
+            return null;
+
+        var requestedSlots = slots.ToList();
+        for (var i = 0; i < requestedSlots.Count; i++)
+        {
+            for (var j = i + 1; j < requestedSlots.Count; j++)
+            {
+                var first = requestedSlots[i];
+                var second = requestedSlots[j];
+                if (first.DayOfWeek == second.DayOfWeek &&
+                    first.StartTime < second.EndTime && second.StartTime < first.EndTime)
+                    return null;
+            }
+        }
+
+        var availability = _context.Set<Domain.Entities.TeacherAvailability>();
+        var existingSlots = await availability.Where(slot => slot.TeacherId == teacherId).ToListAsync();
+        var existingById = existingSlots.ToDictionary(slot => slot.Id);
+        if (requestedSlots.Any(slot => slot.Id.HasValue && !existingById.ContainsKey(slot.Id.Value)))
+            return null;
+
+        var retainedIds = requestedSlots.Where(slot => slot.Id.HasValue).Select(slot => slot.Id!.Value).ToHashSet();
+        availability.RemoveRange(existingSlots.Where(slot => !retainedIds.Contains(slot.Id)));
+
+        foreach (var slot in requestedSlots)
+        {
+            if (slot.Id is Guid id)
+            {
+                var existing = existingById[id];
+                existing.DayOfWeek = slot.DayOfWeek;
+                existing.StartTime = slot.StartTime;
+                existing.EndTime = slot.EndTime;
+            }
+            else
+            {
+                availability.Add(new Domain.Entities.TeacherAvailability
+                {
+                    Id = Guid.NewGuid(),
+                    TeacherId = teacherId,
+                    DayOfWeek = slot.DayOfWeek,
+                    StartTime = slot.StartTime,
+                    EndTime = slot.EndTime,
+                    IsAvailable = true,
+                    CreatedAt = DateTime.UtcNow
+                });
+            }
+        }
+
+        await _context.SaveChangesAsync();
+
+        return await availability
+            .Where(slot => slot.TeacherId == teacherId)
+            .OrderBy(slot => slot.DayOfWeek)
+            .ThenBy(slot => slot.StartTime)
+            .Select(slot => new TeacherAvailabilityDto
+            {
+                Id = slot.Id,
+                TeacherId = slot.TeacherId,
+                DayOfWeek = slot.DayOfWeek,
+                StartTime = slot.StartTime,
+                EndTime = slot.EndTime,
+                IsAvailable = slot.IsAvailable,
+                CreatedAt = slot.CreatedAt
+            })
+            .ToListAsync();
+    }
+
     public async Task DeleteAllAsync(Guid teacherId)
     {
         var items = await _context.Set<Domain.Entities.TeacherAvailability>().Where(a => a.TeacherId == teacherId).ToListAsync();

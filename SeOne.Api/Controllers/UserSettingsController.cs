@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using SeOne.Domain.Entities;
 using SeOne.Infrastructure.Persistence;
+using SeOne.Application.Interfaces;
 
 namespace SeOne.Api.Controllers;
 
@@ -17,10 +18,17 @@ public class UserSettingsController : ApiControllerBase
 {
     private readonly UserManager<User> _users;
     private readonly SeOneDbContext _db;
-    private readonly IWebHostEnvironment _environment;
+    private readonly IImageStorageService _imageStorage;
 
-    public UserSettingsController(UserManager<User> users, SeOneDbContext db, IWebHostEnvironment environment)
-    { _users = users; _db = db; _environment = environment; }
+    public UserSettingsController(
+        UserManager<User> users,
+        SeOneDbContext db,
+        IImageStorageService imageStorage)
+    {
+        _users = users;
+        _db = db;
+        _imageStorage = imageStorage;
+    }
 
     [HttpGet("profile")]
     public async Task<IActionResult> Profile() => await FindUserResponse();
@@ -48,29 +56,116 @@ public class UserSettingsController : ApiControllerBase
     }
 
     [HttpPost("profile/avatar")]
+    [Consumes("multipart/form-data")]
     [RequestSizeLimit(5_000_000)]
-    public async Task<IActionResult> UploadAvatar(IFormFile? avatar)
+    public Task<IActionResult> UploadAvatar(
+        IFormFile? avatar,
+        IFormFile? file,
+        CancellationToken cancellationToken)
     {
-        var user = await CurrentUserAsync(); if (user is null) return NotFound();
-        if (avatar is null || avatar.Length == 0) return BadRequest(new { message = "Avatar file is required." });
-        var allowed = new[] { "image/jpeg", "image/png", "image/webp", "image/gif" };
-        if (!allowed.Contains(avatar.ContentType, StringComparer.OrdinalIgnoreCase)) return BadRequest(new { message = "Unsupported image type." });
-        var extension = Path.GetExtension(avatar.FileName).ToLowerInvariant();
-        if (extension is not ".jpg" and not ".jpeg" and not ".png" and not ".webp" and not ".gif") return BadRequest(new { message = "Unsupported image extension." });
-        var relativeDir = Path.Combine("uploads", "avatars");
-        var absoluteDir = Path.Combine(_environment.WebRootPath ?? Path.Combine(_environment.ContentRootPath, "wwwroot"), relativeDir);
-        Directory.CreateDirectory(absoluteDir);
-        if (!string.IsNullOrWhiteSpace(user.AvatarUrl) && user.AvatarUrl.StartsWith("/uploads/avatars/", StringComparison.OrdinalIgnoreCase))
+        return SaveAvatarAsync(avatar ?? file, cancellationToken);
+    }
+
+    [HttpPost("~/api/teacher/profile/avatar")]
+    [Authorize(Roles = "Teacher")]
+    [Consumes("multipart/form-data")]
+    [RequestSizeLimit(5_000_000)]
+    public Task<IActionResult> UploadTeacherAvatar(
+        IFormFile? avatar,
+        IFormFile? file,
+        CancellationToken cancellationToken)
+    {
+        return SaveAvatarAsync(avatar ?? file, cancellationToken);
+    }
+
+    private async Task<IActionResult> SaveAvatarAsync(
+        IFormFile? avatar,
+        CancellationToken cancellationToken)
+    {
+        var user = await CurrentUserAsync();
+
+        if (user is null)
+            return NotFound();
+
+        if (avatar is null || avatar.Length == 0)
         {
-            var old = Path.Combine(_environment.WebRootPath ?? Path.Combine(_environment.ContentRootPath, "wwwroot"), user.AvatarUrl.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
-            if (System.IO.File.Exists(old)) System.IO.File.Delete(old);
+            return BadRequest(new
+            {
+                message = "Avatar file is required."
+            });
         }
-        var fileName = $"{user.Id:N}-{Guid.NewGuid():N}{extension}";
-        await using (var stream = System.IO.File.Create(Path.Combine(absoluteDir, fileName))) await avatar.CopyToAsync(stream);
-        user.AvatarUrl = $"/uploads/avatars/{fileName}";
+
+        if (avatar.Length > 5_000_000)
+        {
+            return BadRequest(new
+            {
+                message = "Avatar must be 5 MB or smaller."
+            });
+        }
+
+        var extension = Path.GetExtension(avatar.FileName)
+            .ToLowerInvariant();
+
+        var expectedContentType = extension switch
+        {
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            ".webp" => "image/webp",
+            _ => null
+        };
+
+        if (expectedContentType is null ||
+            !string.Equals(
+                avatar.ContentType,
+                expectedContentType,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return BadRequest(new
+            {
+                message = "Only matching JPG, PNG, and WEBP images are allowed."
+            });
+        }
+
+        string avatarUrl;
+
+        try
+        {
+            await using var stream = avatar.OpenReadStream();
+
+            avatarUrl = await _imageStorage.UploadAsync(
+                stream,
+                avatar.FileName,
+                avatar.ContentType,
+                "avatars",
+                cancellationToken);
+        }
+        catch (InvalidOperationException)
+        {
+            return BadRequest(new
+            {
+                message = "Avatar upload failed validation or storage rejected the file."
+            });
+        }
+
+        user.AvatarUrl = avatarUrl;
         user.UpdatedAt = DateTime.UtcNow;
-        await _users.UpdateAsync(user);
-        return Ok(new { avatarUrl = user.AvatarUrl });
+
+        var updateResult = await _users.UpdateAsync(user);
+
+        if (!updateResult.Succeeded)
+        {
+            return StatusCode(
+                StatusCodes.Status500InternalServerError,
+                new
+                {
+                    message = "The avatar was uploaded, but the profile update failed."
+                });
+        }
+
+        return Ok(new
+        {
+            avatarUrl = user.AvatarUrl
+        });
     }
 
     [HttpDelete("profile/avatar")]

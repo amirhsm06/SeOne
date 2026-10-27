@@ -98,7 +98,7 @@ public class EnrollmentService : IEnrollmentService
             {
                 StudentId = e.StudentId,
                 StudentName = e.Student.FullName,
-                StudentEmail = e.Student.Email,
+                StudentEmail = e.Student.Email ?? string.Empty,
                 EnrolledAt = e.EnrolledAt
             })
             .ToListAsync();

@@ -92,7 +92,20 @@ public class NewsletterController : ApiControllerBase
 
     [HttpPost("newsletter/campaigns/{id:guid}/send")]
     [Authorize(Roles = "Admin")]
-    public async Task<IActionResult> SendCampaign(Guid id){var c=await _db.NewsletterCampaigns.FindAsync(id);if(c is null)return NotFound();if(c.Status=="sent")return Ok(MapCampaign(c));c.RecipientCount=await _db.NewsletterSubscribers.CountAsync(s=>s.Status=="active");c.Status="sent";c.SentAt=DateTime.UtcNow;_db.Update(c);await _db.SaveChangesAsync();return Ok(MapCampaign(c));}
+    public async Task<IActionResult> SendCampaign(Guid id)
+    {
+        var campaign = await _db.NewsletterCampaigns.FindAsync(id);
+
+        if (campaign is null)
+            return NotFound();
+
+        return StatusCode(
+            StatusCodes.Status503ServiceUnavailable,
+            new
+            {
+                message = "Newsletter delivery is not configured. No email was sent and the campaign status was not changed. Configure a real email delivery provider before sending campaigns."
+            });
+    }
 
     [HttpDelete("newsletter/campaigns/{id:guid}")]
     [Authorize(Roles = "Admin")]

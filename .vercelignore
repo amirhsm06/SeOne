@@ -4,3 +4,13 @@
 node_modules
 **/node_modules
 .git
+.env.*
+**/.env
+**/.env.*
+*.bak
+**/*.bak
+*.user
+*.suo
+TestResults
+**/TestResults
+.env

@@ -45,6 +45,18 @@ public interface IAssignmentService
         Guid assignmentId,
         CreateSubmissionRequest request);
 
+    Task<SubmissionOperationResult> SaveDraftAsync(
+        Guid studentId,
+        Guid assignmentId,
+        CreateSubmissionRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<SubmissionOperationResult> FinalizeSubmissionAsync(
+        Guid studentId,
+        Guid submissionId,
+        CreateSubmissionRequest request,
+        CancellationToken cancellationToken = default);
+
     Task<List<SubmissionDto>> GetStudentSubmissionsAsync(
         Guid studentId);
 

@@ -1,4 +1,4 @@
-﻿using System.Security.Cryptography;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -47,8 +47,8 @@ public class AuthService : IAuthService
         if (!Enum.TryParse<UserRole>(role, true, out var userRole))
             throw new ArgumentException("Invalid role.");
 
-        if (userRole == UserRole.Admin)
-            throw new ArgumentException("Admin accounts cannot be self-registered.");
+        if (userRole != UserRole.Student)
+            throw new ArgumentException("Only Student accounts can be self-registered.");
 
         if (string.IsNullOrWhiteSpace(firstName))
             throw new ArgumentException("First name is required.");
@@ -190,11 +190,18 @@ public class AuthService : IAuthService
 
         await _dbContext.SaveChangesAsync();
 
-        await _otpSender.SendAsync(
-            normalizedPhone,
-            code);
-
-        return true;
+        try
+        {
+            await _otpSender.SendAsync(normalizedPhone, code);
+            return true;
+        }
+        catch
+        {
+            // A code that was not delivered must not remain usable.
+            otpCode.ConsumedAt = DateTime.UtcNow;
+            await _dbContext.SaveChangesAsync();
+            throw;
+        }
     }
 
     public async Task<AuthResponseDto?> VerifyOtpAsync(

@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using SeOne.Domain.Entities;
@@ -32,6 +32,10 @@ public class SeOneDbContext
 
     public DbSet<Notification> Notifications { get; set; }
 
+    public DbSet<Announcement> Announcements { get; set; }
+
+    public DbSet<AnnouncementUserState> AnnouncementUserStates { get; set; }
+
     public DbSet<Conversation> Conversations { get; set; }
 
     public DbSet<ConversationParticipant> ConversationParticipants { get; set; }
@@ -39,6 +43,8 @@ public class SeOneDbContext
     public DbSet<Message> Messages { get; set; }
 
     public DbSet<Payment> Payments { get; set; }
+
+    public DbSet<TeacherWithdrawal> TeacherWithdrawals { get; set; }
 
     public DbSet<Practice> Practices { get; set; }
 
@@ -49,6 +55,9 @@ public class SeOneDbContext
     public DbSet<PracticeAttemptAnswer> PracticeAttemptAnswers { get; set; }
 
     public DbSet<LearningSession> LearningSessions { get; set; }
+    public DbSet<ClassroomSession> ClassroomSessions { get; set; }
+    public DbSet<ClassroomMaterial> ClassroomMaterials { get; set; }
+    public DbSet<ClassroomAttendance> ClassroomAttendances { get; set; }
 
     public DbSet<SupportTicket> SupportTickets { get; set; }
 

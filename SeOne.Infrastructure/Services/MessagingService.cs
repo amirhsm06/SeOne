@@ -1,20 +1,148 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using SeOne.Application.DTOs;
 using SeOne.Application.Interfaces;
 using SeOne.Domain.Entities;
 using SeOne.Domain.Enums;
 using SeOne.Infrastructure.Persistence;
 
+
 namespace SeOne.Infrastructure.Services;
 
 public class MessagingService : IMessagingService
 {
     private readonly SeOneDbContext _context;
+    private readonly IMessagingFileStorageService _messagingStorage;
+    private readonly ILogger<MessagingService> _logger;
+    private readonly INotificationService _notificationService;
 
     public MessagingService(
-        SeOneDbContext context)
+        SeOneDbContext context,
+        IMessagingFileStorageService messagingStorage,
+        INotificationService notificationService,
+        ILogger<MessagingService> logger)
     {
         _context = context;
+        _messagingStorage = messagingStorage;
+        _notificationService = notificationService;
+        _logger = logger;
+    }
+
+    public async Task<List<MessagingContactDto>> GetMessagingContactsAsync(Guid userId)
+    {
+        var user = await _context.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId);
+        if (user is null)
+            return new List<MessagingContactDto>();
+
+        var results = new List<MessagingContactDto>();
+        var seen = new HashSet<string>(); // key: "{id}:{courseId}"
+
+        if (user.Role == Domain.Enums.UserRole.Student)
+        {
+            // Get published courses the student is enrolled in
+            var courses = await _context.Set<Enrollment>()
+                .AsNoTracking()
+                .Where(e => e.StudentId == userId && e.Course.IsPublished)
+                .Select(e => new { e.CourseId, e.Course.Title })
+                .ToListAsync();
+
+            if (courses.Count > 0)
+            {
+                var courseIds = courses.Select(c => c.CourseId).ToHashSet();
+
+                var teacherPairs = await _context.Set<CourseInstanceTeacher>()
+                    .AsNoTracking()
+                    .Where(t => courseIds.Contains(t.CourseInstance.CourseId) && t.Teacher.AccountStatus == "active")
+                    .Select(t => new
+                    {
+                        TeacherId = t.TeacherId,
+                        TeacherName = t.Teacher.FullName,
+                        Avatar = t.Teacher.AvatarUrl,
+                        CourseId = t.CourseInstance.CourseId,
+                    CourseTitle = t.CourseInstance.Course == null ? null : t.CourseInstance.Course.Title
+                    })
+                    .ToListAsync();
+
+                foreach (var t in teacherPairs)
+                {
+                    var key = $"{t.TeacherId}:{t.CourseId}";
+                    if (seen.Add(key) && t.TeacherId != userId)
+                    {
+                        results.Add(new MessagingContactDto
+                        {
+                            Id = t.TeacherId,
+                            Name = t.TeacherName,
+                            Avatar = t.Avatar,
+                            Role = GetRoleName(Domain.Enums.UserRole.Teacher),
+                            CourseId = t.CourseId,
+                            CourseTitle = t.CourseTitle
+                        });
+                    }
+                }
+            }
+        }
+        else if (user.Role == Domain.Enums.UserRole.Teacher)
+        {
+            // Get courses teacher teaches and students enrolled in them
+            var courseIds = await _context.Set<CourseInstanceTeacher>()
+                .AsNoTracking()
+                .Where(t => t.TeacherId == userId)
+                .Select(t => t.CourseInstance.CourseId)
+                .Distinct()
+                .ToListAsync();
+
+            if (courseIds.Count > 0)
+            {
+                var students = await _context.Set<Enrollment>()
+                    .AsNoTracking()
+                    .Where(e => courseIds.Contains(e.CourseId) && e.Student.AccountStatus == "active")
+                    .Select(e => new { e.StudentId, e.Student.FullName, Avatar = e.Student.AvatarUrl, e.CourseId, e.Course.Title })
+                    .ToListAsync();
+
+                foreach (var s in students)
+                {
+                    var key = $"{s.StudentId}:{s.CourseId}";
+                    if (seen.Add(key) && s.StudentId != userId)
+                    {
+                        results.Add(new MessagingContactDto
+                        {
+                            Id = s.StudentId,
+                            Name = s.FullName,
+                            Avatar = s.Avatar,
+                            Role = GetRoleName(Domain.Enums.UserRole.Student),
+                            CourseId = s.CourseId,
+                            CourseTitle = s.Title
+                        });
+                    }
+                }
+            }
+        }
+
+        // Support contact configured via SiteSetting "supportEmail"
+        var supportSetting = await _context.Set<SiteSetting>().AsNoTracking().FirstOrDefaultAsync(s => s.Key == "supportEmail");
+        if (supportSetting is not null && !string.IsNullOrWhiteSpace(supportSetting.Value))
+        {
+            var supportUser = await _context.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Email == supportSetting.Value && (u.Role == Domain.Enums.UserRole.Admin || u.Role == Domain.Enums.UserRole.Teacher) && u.AccountStatus == "active");
+            if (supportUser is not null && supportUser.Id != userId)
+            {
+                string key = $"{supportUser.Id}:";
+                string key2 = $"{supportUser.Id}:null";
+                if (seen.Add(key2))
+                {
+                    results.Add(new MessagingContactDto
+                    {
+                        Id = supportUser.Id,
+                        Name = supportUser.FullName,
+                        Avatar = supportUser.AvatarUrl,
+                        Role = GetRoleName(supportUser.Role),
+                        CourseId = null,
+                        CourseTitle = null
+                    });
+                }
+            }
+        }
+
+        return results;
     }
 
     public async Task<List<ConversationDto>>
@@ -146,6 +274,21 @@ public class MessagingService : IMessagingService
             {
                 return null;
             }
+        }
+
+        // Enforce contact eligibility: participant must appear in the
+        // contacts list for the requesting user and, if a related
+        // course is specified, the contact must be associated with
+        // that course. This prevents creating conversations with
+        // arbitrary users.
+        var contacts = await GetMessagingContactsAsync(userId);
+        var eligible = contacts.Any(c =>
+            c.Id == request.ParticipantId &&
+            (!request.RelatedCourseId.HasValue || (c.CourseId.HasValue && c.CourseId.Value == request.RelatedCourseId.Value)));
+
+        if (!eligible)
+        {
+            return null;
         }
 
         var existing =
@@ -296,13 +439,13 @@ public class MessagingService : IMessagingService
                 .OrderBy(x => x.CreatedAt)
                 .ToListAsync();
 
-        return messages
-            .Select(x =>
-                MapMessage(
-                    x,
-                    userId,
-                    participant.LastReadAt))
-            .ToList();
+        var list = new List<MessageDto>();
+        foreach (var m in messages)
+        {
+            list.Add(await MapMessageAsync(m, userId, participant.LastReadAt));
+        }
+
+        return list;
     }
 
     public async Task<MessageDto?>
@@ -374,6 +517,51 @@ public class MessagingService : IMessagingService
         conversation.UpdatedAt = now;
 
         await _context.SaveChangesAsync();
+
+        // Notify conversation participants other than the sender.
+        var recipientIds = await _context.Set<ConversationParticipant>()
+            .AsNoTracking()
+            .Where(x => x.ConversationId == conversationId && x.UserId != userId)
+            .Select(x => x.UserId)
+            .Distinct()
+            .ToListAsync();
+
+        if (recipientIds.Count > 0)
+        {
+            var senderName = await _context.Users
+                .AsNoTracking()
+                .Where(x => x.Id == userId)
+                .Select(x => x.FullName)
+                .FirstOrDefaultAsync() ?? "Someone";
+
+            foreach (var recipientId in recipientIds)
+            {
+                try
+                {
+                    await _notificationService.CreateAsync(
+                        recipientId,
+                        "Message",
+                        $"New message from {senderName}",
+                        "You have received a new message.",
+                        new Dictionary<string, object?>
+                        {
+                            ["conversationId"] = conversationId,
+                            ["messageId"] = message.Id,
+                            ["senderId"] = userId
+                        });
+                }
+                catch (Exception exception)
+                {
+                    // The message is already persisted. Do not turn a
+                    // notification failure into a failed message response.
+                    _logger.LogWarning(
+                        exception,
+                        "Could not create in-app notification for message {MessageId} and recipient {RecipientId}.",
+                        message.Id,
+                        recipientId);
+                }
+            }
+        }
 
         return await _context.Set<Message>()
             .AsNoTracking()
@@ -626,8 +814,8 @@ public class MessagingService : IMessagingService
         };
     }
 
-    private static MessageDto
-        MapMessage(
+    private async Task<MessageDto>
+        MapMessageAsync(
             Message message,
             Guid currentUserId,
             DateTime? lastReadAt)
@@ -642,7 +830,7 @@ public class MessagingService : IMessagingService
              message.CreatedAt <=
              lastReadAt.Value);
 
-        return new MessageDto
+        var dto = new MessageDto
         {
             Id = message.Id,
             ConversationId =
@@ -657,8 +845,8 @@ public class MessagingService : IMessagingService
                     message.Sender.Role),
             Content =
                 message.Content,
-            Attachments =
-                message.Attachments,
+            // Attachments will be resolved into signed URLs when possible
+            Attachments = new List<string>(),
             CreatedAt =
                 message.CreatedAt,
             IsRead = isRead,
@@ -668,6 +856,103 @@ public class MessagingService : IMessagingService
                     ? lastReadAt
                     : null
         };
+
+        if (message.Attachments is not null)
+{
+    foreach (var attachment in message.Attachments)
+    {
+        if (string.IsNullOrWhiteSpace(attachment))
+            continue;
+
+        if (Uri.TryCreate(attachment, UriKind.Absolute, out var uri))
+        {
+            if (uri.Scheme is "https" or "http" &&
+                string.IsNullOrEmpty(uri.UserInfo))
+            {
+                dto.Attachments.Add(attachment);
+            }
+
+            continue;
+        }
+
+        if (!IsExpectedMessagingObjectPath(
+                attachment,
+                message.ConversationId,
+                message.Id))
+        {
+            _logger.LogWarning(
+                "Skipped an invalid attachment reference for message {MessageId}.",
+                message.Id);
+
+            continue;
+        }
+
+        try
+        {
+            var signedUrl = await _messagingStorage
+                .CreateSignedDownloadUrlAsync(attachment, 300);
+
+            if (!string.IsNullOrWhiteSpace(signedUrl))
+            {
+                dto.Attachments.Add(signedUrl);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Could not sign an attachment for message {MessageId}.",
+                    message.Id);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Could not resolve an attachment for message {MessageId}.",
+                message.Id);
+        }
+    }
+}
+
+        return dto;
+    }
+    private static bool IsExpectedMessagingObjectPath(
+    string path,
+    Guid conversationId,
+    Guid messageId)
+    {
+        var segments = path.Split('/');
+
+        if (segments.Length != 4 ||
+            segments[0] != "private-messaging" ||
+            !Guid.TryParseExact(segments[1], "D", out var pathConversationId) ||
+            !Guid.TryParseExact(segments[2], "D", out var pathMessageId) ||
+            pathConversationId != conversationId ||
+            pathMessageId != messageId)
+        {
+            return false;
+        }
+
+        var fileName = segments[3];
+        var extension = Path.GetExtension(fileName);
+
+        var allowedExtensions = new HashSet<string>(
+            StringComparer.OrdinalIgnoreCase)
+    {
+        ".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif",
+        ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt",
+        ".mp3", ".m4a", ".wav", ".mp4", ".zip"
+    };
+
+        if (!allowedExtensions.Contains(extension))
+            return false;
+
+        var fileId = fileName[..^extension.Length];
+
+        return Guid.TryParseExact(fileId, "N", out var parsedId) &&
+               string.Equals(
+                   fileId,
+                   parsedId.ToString("N"),
+                   StringComparison.Ordinal);
     }
 
     private static bool

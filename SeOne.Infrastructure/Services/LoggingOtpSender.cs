@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using SeOne.Application.Interfaces;
 
 namespace SeOne.Infrastructure.Services;
@@ -17,11 +17,12 @@ public class LoggingOtpSender : IOtpSender
         string code,
         CancellationToken cancellationToken = default)
     {
-        _logger.LogInformation(
-            "SE ONE OTP generated. Phone: {PhoneNumber}, OTP: {OtpCode}",
-            phoneNumber,
-            code);
+        cancellationToken.ThrowIfCancellationRequested();
 
-        return Task.CompletedTask;
+        _logger.LogWarning(
+            "OTP delivery is not configured; the verification code was not sent.");
+
+        throw new SeOne.Application.Exceptions.DeliveryNotConfiguredException(
+            "OTP delivery is not configured. Configure an SMS provider before requesting verification codes.");
     }
 }

@@ -145,6 +145,11 @@ builder.Services.AddScoped<IPaymentGateway, DevelopmentPaymentGateway>();
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IPracticeService, PracticeService>();
 builder.Services.AddHttpClient<IImageStorageService, SupabaseImageStorageService>();
+builder.Services.AddHttpClient<IAssignmentFileStorageService, SupabaseAssignmentFileStorageService>();
+builder.Services.AddHttpClient<IMessagingFileStorageService, SupabaseMessagingFileStorageService>();
+builder.Services.AddHttpClient<ITeacherVideoStorageService,SupabaseTeacherVideoStorageService>();
+builder.Services.AddHttpClient<ISupportFileStorageService, SupabaseSupportFileStorageService>();
+builder.Services.AddHttpClient<IClassroomFileStorageService, SupabaseClassroomFileStorageService>();
 
 var app = builder.Build();
 

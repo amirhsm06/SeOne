@@ -77,6 +77,29 @@ public class StudentSubmissionsController : ControllerBase
         return Ok(result);
     }
 
+    [HttpPost("{submissionId:guid}/submit")]
+    public async Task<IActionResult> FinalizeSubmission(
+        Guid submissionId,
+        [FromBody] CreateSubmissionRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await _assignmentService.FinalizeSubmissionAsync(
+            GetUserId(),
+            submissionId,
+            request,
+            cancellationToken);
+
+        return result.Outcome switch
+        {
+            SubmissionOperationOutcome.Succeeded when result.Submission is not null => Ok(result.Submission),
+            SubmissionOperationOutcome.InvalidRequest => BadRequest(new { message = "Submission content or attachments are invalid." }),
+            SubmissionOperationOutcome.SubmissionNotFound => NotFound(),
+            SubmissionOperationOutcome.AssignmentUnavailable => NotFound(new { message = "Assignment is not available to this student." }),
+            SubmissionOperationOutcome.Conflict => Conflict(new { message = "This submission status does not permit final submission." }),
+            _ => StatusCode(StatusCodes.Status500InternalServerError)
+        };
+    }
+
     private Guid GetUserId()
     {
         var claim =

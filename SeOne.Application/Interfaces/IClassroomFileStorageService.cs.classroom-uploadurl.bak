@@ -1,0 +1,30 @@
+﻿using System;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace SeOne.Application.Interfaces;
+
+public sealed record ClassroomStorageUploadGrant(string Bucket, string Path, string Token);
+
+public interface IClassroomFileStorageService
+{
+    Task<ClassroomStorageUploadGrant?> CreateUploadGrantAsync(
+        Guid sessionId,
+        string fileName,
+        string contentType,
+        long size,
+        CancellationToken cancellationToken = default);
+
+    bool IsValidObjectPath(Guid sessionId, string? objectPath);
+
+    Task<string?> CreateSignedDownloadUrlAsync(
+        Guid sessionId,
+        string objectPath,
+        int expiresInSeconds = 300,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> DeleteObjectAsync(
+        Guid sessionId,
+        string objectPath,
+        CancellationToken cancellationToken = default);
+}

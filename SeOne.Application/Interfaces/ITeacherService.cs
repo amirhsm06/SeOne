@@ -10,5 +10,6 @@ public interface ITeacherService
 
     Task<TeacherDto?> GetMyProfileAsync(Guid teacherId);
 
-    Task<TeacherDto?> UpdateMyProfileAsync(Guid teacherId, string? avatar, string? teachingLanguage, string? subject, string? level, string? bio);
+    Task<TeacherDto?> UpdateMyProfileAsync(Guid teacherId, string? avatar, string? videoUrl, string? teachingLanguage, string? subject, string? level, string? bio);
+    Task<bool> UpdateMyVideoUrlAsync(Guid teacherId, string videoUrl);
 }

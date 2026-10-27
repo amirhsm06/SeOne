@@ -4,6 +4,21 @@ using System.ComponentModel.DataAnnotations;
 
 namespace SeOne.Application.DTOs;
 
+public class MessagingContactDto
+{
+    public Guid Id { get; set; }
+
+    public string Name { get; set; } = string.Empty;
+
+    public string? Avatar { get; set; }
+
+    public string Role { get; set; } = string.Empty;
+
+    public Guid? CourseId { get; set; }
+
+    public string? CourseTitle { get; set; }
+}
+
 public class ConversationParticipantDto
 {
     public Guid Id { get; set; }

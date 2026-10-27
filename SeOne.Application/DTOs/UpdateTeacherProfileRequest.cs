@@ -7,6 +7,12 @@ public class UpdateTeacherProfileRequest
     [MaxLength(500)]
     public string? Avatar { get; set; }
 
+    [MaxLength(500)]
+    public string? AvatarUrl { get; set; }
+
+    [MaxLength(500)]
+    public string? VideoUrl { get; set; }
+
     [MaxLength(100)]
     public string? TeachingLanguage { get; set; }
 

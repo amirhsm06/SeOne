@@ -10,6 +10,8 @@ public class TeacherProfile
 
     public string? Avatar { get; set; }
 
+    public string? VideoUrl { get; set; }
+
     public string? TeachingLanguage { get; set; }
 
     public string? Subject { get; set; }

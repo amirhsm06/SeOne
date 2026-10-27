@@ -86,7 +86,7 @@ public class StudentDashboardService : IStudentDashboardService
         {
             Id = user.Id,
             FullName = user.FullName,
-            Email = user.Email,
+            Email = user.Email ?? string.Empty,
             EnrolledCourseCount = enrolledCourseCount,
             CompletedCourseCount = completedCourseCount,
             OverallProgressPercentage = overall,

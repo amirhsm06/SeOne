@@ -423,10 +423,178 @@ public class AssignmentService : IAssignmentService
         _context.Set<AssignmentSubmission>()
             .Add(submission);
 
-        await _context.SaveChangesAsync();
+        try
+        {
+            await _context.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            _context.Entry(submission).State = EntityState.Detached;
+            var submissionWasCreatedConcurrently = await _context.Set<AssignmentSubmission>()
+                .AnyAsync(x => x.AssignmentId == assignmentId && x.StudentId == studentId);
+            if (submissionWasCreatedConcurrently)
+                return null;
+
+            throw;
+        }
 
         return await GetSubmissionDtoAsync(
             submission.Id);
+    }
+
+    public async Task<SubmissionOperationResult> SaveDraftAsync(
+        Guid studentId,
+        Guid assignmentId,
+        CreateSubmissionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (request is null ||
+            !IsValidText(request.Content, 20000) ||
+            !AreAttachmentsValid(request.Attachments))
+        {
+            return new SubmissionOperationResult(SubmissionOperationOutcome.InvalidRequest);
+        }
+
+        var assignment = await _context.Set<Assignment>()
+            .AsNoTracking()
+            .Where(x =>
+                x.Id == assignmentId &&
+                x.IsPublished &&
+                x.Course.IsPublished)
+            .Select(x => new { x.Id, x.CourseId })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (assignment is null || !await _context.Set<Enrollment>()
+                .AnyAsync(x => x.StudentId == studentId && x.CourseId == assignment.CourseId, cancellationToken))
+        {
+            return new SubmissionOperationResult(SubmissionOperationOutcome.AssignmentUnavailable);
+        }
+
+        var submission = await _context.Set<AssignmentSubmission>()
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x =>
+                x.AssignmentId == assignmentId &&
+                x.StudentId == studentId,
+                cancellationToken);
+
+        if (submission is not null && submission.Status != AssignmentSubmissionStatus.Draft)
+        {
+            return new SubmissionOperationResult(SubmissionOperationOutcome.Conflict);
+        }
+
+        var now = DateTime.UtcNow;
+        var content = request.Content.Trim();
+        var attachments = request.Attachments?.ToList() ?? new List<string>();
+        if (submission is null)
+        {
+            submission = new AssignmentSubmission
+            {
+                Id = Guid.NewGuid(),
+                AssignmentId = assignmentId,
+                StudentId = studentId,
+                Content = content,
+                Attachments = attachments,
+                SubmittedAt = now,
+                Status = AssignmentSubmissionStatus.Draft
+            };
+            _context.Set<AssignmentSubmission>().Add(submission);
+            try
+            {
+                await _context.SaveChangesAsync(cancellationToken);
+            }
+            catch (DbUpdateException)
+            {
+                _context.Entry(submission).State = EntityState.Detached;
+                var draftWasCreatedConcurrently = await _context.Set<AssignmentSubmission>()
+                    .AnyAsync(x => x.AssignmentId == assignmentId && x.StudentId == studentId, cancellationToken);
+                if (draftWasCreatedConcurrently)
+                    return new SubmissionOperationResult(SubmissionOperationOutcome.Conflict);
+
+                throw;
+            }
+        }
+        else
+        {
+            var rowsUpdated = await _context.Set<AssignmentSubmission>()
+                .Where(x =>
+                    x.Id == submission.Id &&
+                    x.AssignmentId == assignmentId &&
+                    x.StudentId == studentId &&
+                    x.Status == AssignmentSubmissionStatus.Draft)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(x => x.Content, content)
+                    .SetProperty(x => x.Attachments, attachments)
+                    .SetProperty(x => x.SubmittedAt, now), cancellationToken);
+
+            if (rowsUpdated != 1)
+                return new SubmissionOperationResult(SubmissionOperationOutcome.Conflict);
+        }
+
+        return new SubmissionOperationResult(
+            SubmissionOperationOutcome.Succeeded,
+            await GetSubmissionDtoAsync(submission.Id, cancellationToken));
+    }
+
+    public async Task<SubmissionOperationResult> FinalizeSubmissionAsync(
+        Guid studentId,
+        Guid submissionId,
+        CreateSubmissionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (request is null ||
+            !IsValidText(request.Content, 20000) ||
+            !AreAttachmentsValid(request.Attachments))
+        {
+            return new SubmissionOperationResult(SubmissionOperationOutcome.InvalidRequest);
+        }
+
+        var submission = await _context.Set<AssignmentSubmission>()
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == submissionId && x.StudentId == studentId, cancellationToken);
+        if (submission is null)
+            return new SubmissionOperationResult(SubmissionOperationOutcome.SubmissionNotFound);
+
+        var assignment = await _context.Set<Assignment>()
+            .AsNoTracking()
+            .Where(x =>
+                x.Id == submission.AssignmentId &&
+                x.IsPublished &&
+                x.Course.IsPublished)
+            .Select(x => new { x.CourseId })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (assignment is null || !await _context.Set<Enrollment>()
+                .AnyAsync(x => x.StudentId == studentId && x.CourseId == assignment.CourseId, cancellationToken))
+        {
+            return new SubmissionOperationResult(SubmissionOperationOutcome.AssignmentUnavailable);
+        }
+
+        var content = request.Content.Trim();
+        var attachments = request.Attachments?.ToList() ?? new List<string>();
+        var submittedAt = DateTime.UtcNow;
+        var rowsUpdated = await _context.Set<AssignmentSubmission>()
+            .Where(x =>
+                x.Id == submissionId &&
+                x.StudentId == studentId &&
+                x.AssignmentId == submission.AssignmentId &&
+                (x.Status == AssignmentSubmissionStatus.Draft ||
+                 x.Status == AssignmentSubmissionStatus.Returned))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.Content, content)
+                .SetProperty(x => x.Attachments, attachments)
+                .SetProperty(x => x.SubmittedAt, submittedAt)
+                .SetProperty(x => x.Status, AssignmentSubmissionStatus.Submitted)
+                .SetProperty(x => x.Grade, (decimal?)null)
+                .SetProperty(x => x.Feedback, (string?)null)
+                .SetProperty(x => x.GradedAt, (DateTime?)null)
+                .SetProperty(x => x.GradedById, (Guid?)null), cancellationToken);
+
+        if (rowsUpdated != 1)
+            return new SubmissionOperationResult(SubmissionOperationOutcome.Conflict);
+
+        return new SubmissionOperationResult(
+            SubmissionOperationOutcome.Succeeded,
+            await GetSubmissionDtoAsync(submission.Id, cancellationToken));
     }
 
     public async Task<List<SubmissionDto>>
@@ -463,6 +631,7 @@ public class AssignmentService : IAssignmentService
     {
         var submission =
             await _context.Set<AssignmentSubmission>()
+                .AsNoTracking()
                 .FirstOrDefaultAsync(x =>
                     x.Id == submissionId &&
                     x.StudentId == studentId);
@@ -478,53 +647,50 @@ public class AssignmentService : IAssignmentService
             return null;
         }
 
-        if (request.Content is not null)
+        if (request.Content is not null &&
+            !IsValidText(request.Content, 20000))
         {
-            if (!IsValidText(
-                    request.Content,
-                    20000))
-            {
-                return null;
-            }
-
-            submission.Content =
-                request.Content.Trim();
+            return null;
         }
 
         if (request.Attachments is not null)
         {
-            if (!AreAttachmentsValid(
-                    request.Attachments))
+            if (!AreAttachmentsValid(request.Attachments))
             {
                 return null;
             }
-
-            submission.Attachments =
-                request.Attachments
-                    .Where(x =>
-                        !string.IsNullOrWhiteSpace(x))
-                    .Select(x => x.Trim())
-                    .ToList();
         }
 
-        submission.SubmittedAt =
-            DateTime.UtcNow;
+        var content = request.Content?.Trim() ?? submission.Content;
+        var attachments = request.Attachments?.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()).ToList() ?? submission.Attachments;
+        var submittedAt = DateTime.UtcNow;
+        var rowsUpdated = await _context.Set<AssignmentSubmission>()
+            .Where(x =>
+                x.Id == submissionId &&
+                x.StudentId == studentId &&
+                x.Status == AssignmentSubmissionStatus.Draft)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.Content, content)
+                .SetProperty(x => x.Attachments, attachments)
+                .SetProperty(x => x.SubmittedAt, submittedAt));
 
-        await _context.SaveChangesAsync();
+        if (rowsUpdated != 1)
+            return null;
 
         return await GetSubmissionDtoAsync(
-            submission.Id);
+            submissionId);
     }
 
     private async Task<SubmissionDto?>
         GetSubmissionDtoAsync(
-            Guid submissionId)
+            Guid submissionId,
+            CancellationToken cancellationToken = default)
     {
         return await _context.Set<AssignmentSubmission>()
             .AsNoTracking()
             .Where(x => x.Id == submissionId)
             .Select(MapSubmission)
-            .FirstOrDefaultAsync();
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     private static bool IsValidText(

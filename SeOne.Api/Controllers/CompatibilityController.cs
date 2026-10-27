@@ -563,6 +563,40 @@ public class CompatibilityController : ApiControllerBase
         return Ok(slots.Select(MapAvailability));
     }
 
+    [HttpPut("teacher/availability")]
+    [Authorize(Roles = "Teacher")]
+    public async Task<IActionResult> ReplaceAvailability([FromBody] TeacherAvailabilityReplacementRequest? request)
+    {
+        var teacherId = RequireUserId();
+        if (request?.Slots is null || request.Slots.Any(slot => slot is null))
+            return BadRequest(new { message = "A slots array is required." });
+
+        var replacementSlots = new List<TeacherAvailabilityReplacementSlotDto>(request.Slots.Count);
+        foreach (var slot in request.Slots)
+        {
+            if (!TryParseWeekdayName(slot.DayOfWeek, out var day) ||
+                !TimeSpan.TryParseExact(slot.StartTime, @"hh\:mm", CultureInfo.InvariantCulture, out var startTime) ||
+                !TimeSpan.TryParseExact(slot.EndTime, @"hh\:mm", CultureInfo.InvariantCulture, out var endTime))
+                return BadRequest(new { message = "Each slot must have a weekday name and times formatted as HH:mm." });
+
+            Guid? id = null;
+            if (slot.Id is not null)
+            {
+                if (!Guid.TryParse(slot.Id, out var parsedId) || parsedId == Guid.Empty)
+                    return BadRequest(new { message = "Slot IDs must be valid GUIDs." });
+                id = parsedId;
+            }
+
+            replacementSlots.Add(new TeacherAvailabilityReplacementSlotDto(id, day, startTime, endTime));
+        }
+
+        var savedSlots = await _availabilityService.ReplaceAvailabilityAsync(teacherId, replacementSlots);
+        if (savedSlots is null)
+            return Conflict(new { message = "Availability is invalid, overlapping, or contains a slot ID that does not belong to you." });
+
+        return Ok(savedSlots.Select(MapAvailability).ToList());
+    }
+
     [HttpPost("teacher/availability")]
     [Authorize(Roles = "Teacher")]
     public async Task<IActionResult> CreateAvailability([FromBody] CreateAvailabilityCompatibilityRequest request)
@@ -805,6 +839,17 @@ public class CompatibilityController : ApiControllerBase
         }
         day = DayOfWeek.Monday;
         return false;
+    }
+
+    private static bool TryParseWeekdayName(string? value, out DayOfWeek day)
+    {
+        day = default;
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        var weekday = value.Trim();
+        return Enum.GetNames<DayOfWeek>().Any(name => string.Equals(name, weekday, StringComparison.OrdinalIgnoreCase)) &&
+               Enum.TryParse(weekday, true, out day);
     }
 
     private static bool TryParseRange(string value, out TimeSpan start, out TimeSpan end)

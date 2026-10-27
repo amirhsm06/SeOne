@@ -4,6 +4,9 @@ namespace SeOne.Application.Interfaces;
 
 public interface IMessagingService
 {
+    Task<List<MessagingContactDto>> GetMessagingContactsAsync(
+        Guid userId);
+
     Task<List<ConversationDto>> GetConversationsAsync(
         Guid userId);
 

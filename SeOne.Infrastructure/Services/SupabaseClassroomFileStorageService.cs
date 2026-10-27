@@ -1,0 +1,554 @@
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using SeOne.Application.Interfaces;
+
+namespace SeOne.Infrastructure.Services;
+
+public sealed class SupabaseClassroomFileStorageService : IClassroomFileStorageService
+{
+    private const long MaximumFileSizeBytes = 52_428_800;
+    private const int MaximumSignedUrlLifetimeSeconds = 3600;
+
+    private static readonly IReadOnlyDictionary<string, string> AllowedMimeTypes =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [".pdf"] = "application/pdf",
+            [".png"] = "image/png",
+            [".jpg"] = "image/jpeg",
+            [".jpeg"] = "image/jpeg",
+            [".webp"] = "image/webp",
+            [".gif"] = "image/gif",
+            [".doc"] = "application/msword",
+            [".docx"] = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            [".xls"] = "application/vnd.ms-excel",
+            [".xlsx"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            [".ppt"] = "application/vnd.ms-powerpoint",
+            [".pptx"] = "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            [".txt"] = "text/plain",
+            [".mp4"] = "video/mp4",
+            [".webm"] = "video/webm"
+        };
+
+    private readonly HttpClient _httpClient;
+    private readonly string? _supabaseUrl;
+    private readonly string? _serviceKey;
+    private readonly string? _bucket;
+    private readonly string? _assignmentsBucket;
+    private readonly string? _messagingBucket;
+    private readonly string? _supportBucket;
+    private readonly string? _teacherVideoBucket;
+    private readonly string _imageBucket;
+
+    public SupabaseClassroomFileStorageService(HttpClient httpClient, IConfiguration configuration)
+    {
+        _httpClient = httpClient;
+        _supabaseUrl = configuration["SUPABASE_URL"]?.TrimEnd('/');
+        _serviceKey = configuration["SUPABASE_SECRET_KEY"] ?? configuration["SUPABASE_SERVICE_ROLE_KEY"];
+        _bucket = configuration["SUPABASE_CLASSROOM_STORAGE_BUCKET"]?.Trim();
+        _assignmentsBucket = configuration["SUPABASE_ASSIGNMENT_STORAGE_BUCKET"]?.Trim();
+        _messagingBucket = configuration["SUPABASE_MESSAGING_STORAGE_BUCKET"]?.Trim();
+        _supportBucket = configuration["SUPABASE_SUPPORT_STORAGE_BUCKET"]?.Trim();
+        _teacherVideoBucket = configuration["SUPABASE_TEACHER_VIDEO_STORAGE_BUCKET"]?.Trim();
+        _imageBucket = configuration["SUPABASE_STORAGE_BUCKET"]?.Trim() ?? "seone-images";
+    }
+
+    private bool IsConfigured =>
+        !string.IsNullOrWhiteSpace(_supabaseUrl) &&
+        !string.IsNullOrWhiteSpace(_serviceKey) &&
+        !string.IsNullOrWhiteSpace(_bucket) &&
+        !_bucket.Contains('/') &&
+        !string.Equals(_bucket, _assignmentsBucket, StringComparison.OrdinalIgnoreCase) &&
+        !string.Equals(_bucket, _messagingBucket, StringComparison.OrdinalIgnoreCase) &&
+        !string.Equals(_bucket, _supportBucket, StringComparison.OrdinalIgnoreCase) &&
+        !string.Equals(_bucket, _teacherVideoBucket, StringComparison.OrdinalIgnoreCase) &&
+        !string.Equals(_bucket, _imageBucket, StringComparison.OrdinalIgnoreCase) &&
+        Uri.TryCreate(_supabaseUrl, UriKind.Absolute, out var uri) &&
+        uri.Scheme == Uri.UriSchemeHttps &&
+        string.IsNullOrEmpty(uri.UserInfo) &&
+        string.IsNullOrEmpty(uri.Query) &&
+        string.IsNullOrEmpty(uri.Fragment);
+
+    public bool IsValidObjectPath(Guid sessionId, string? objectPath) =>
+        TryValidateObjectPath(sessionId, objectPath, out _, out _);
+
+    public async Task<ClassroomStorageUploadGrant?> CreateUploadGrantAsync(
+    Guid sessionId,
+    string fileName,
+    string contentType,
+    long size,
+    CancellationToken cancellationToken = default)
+    {
+        var safeName = (fileName ?? string.Empty)
+            .Replace('\\', '/')
+            .Split('/')
+            .LastOrDefault() ?? string.Empty;
+
+        var extension = Path.GetExtension(safeName).ToLowerInvariant();
+
+        if (sessionId == Guid.Empty || safeName.Length == 0 || safeName.Length > 255 ||
+            size <= 0 || size > MaximumFileSizeBytes ||
+            !AllowedMimeTypes.TryGetValue(extension, out var expectedMimeType) ||
+            !string.Equals(
+                contentType?.Split(';', 2)[0].Trim(),
+                expectedMimeType,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine("[ClassroomStorageDiag] Rejected file metadata.");
+            return null;
+        }
+
+        var path =
+            $"classroom-sessions/{sessionId:D}/{Guid.NewGuid():N}{extension}";
+
+        if (!TryValidateObjectPath(sessionId, path, out _, out _))
+        {
+            Console.WriteLine("[ClassroomStorageDiag] Generated object path failed validation.");
+            return null;
+        }
+
+        if (!await IsPrivateBucketReadyAsync(expectedMimeType, cancellationToken))
+        {
+            Console.WriteLine("[ClassroomStorageDiag] Private bucket readiness check failed.");
+            return null;
+        }
+
+        var url =
+            $"{_supabaseUrl}/storage/v1/object/upload/sign/" +
+            $"{Uri.EscapeDataString(_bucket!)}/{EncodePath(path)}";
+
+        using var request = CreateAuthorizedRequest(HttpMethod.Post, url);
+        request.Content = JsonContent.Create(new { upsert = false });
+
+        try
+        {
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Console.WriteLine(
+                    $"[ClassroomStorageDiag] Upload-sign HTTP status: {(int)response.StatusCode}.");
+                return null;
+            }
+
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+
+            var propertyNames = root.ValueKind == JsonValueKind.Object
+                ? string.Join(",", root.EnumerateObject().Select(p => p.Name))
+                : "(response root is not an object)";
+
+            Console.WriteLine(
+                $"[ClassroomStorageDiag] Upload-sign succeeded. " +
+                $"RootType={root.ValueKind}; Properties={propertyNames}");
+
+            if (!TryGetJsonProperty(root, "url", out var urlElement) ||
+                urlElement.ValueKind != JsonValueKind.String)
+            {
+                Console.WriteLine(
+                    "[ClassroomStorageDiag] Response has no string-valued 'url' property.");
+                return null;
+            }
+
+            var rawUrl = urlElement.GetString();
+
+            var hasTokenQuery = false;
+            if (!string.IsNullOrWhiteSpace(rawUrl))
+            {
+                Uri? candidateUri = null;
+
+                if (Uri.TryCreate(rawUrl, UriKind.Absolute, out var absoluteCandidate))
+                {
+                    candidateUri = absoluteCandidate;
+                }
+                else if (Uri.TryCreate(
+                    new Uri(_supabaseUrl!.TrimEnd('/') + "/"),
+                    rawUrl.TrimStart('/'),
+                    out var relativeCandidate))
+                {
+                    candidateUri = relativeCandidate;
+                }
+
+                if (candidateUri is not null)
+                {
+                    hasTokenQuery =
+                        !string.IsNullOrWhiteSpace(GetQueryValue(candidateUri, "token"));
+                }
+            }
+
+            var trustedUrl = ValidateStorageUrl(
+                rawUrl,
+                "upload",
+                path,
+                requireToken: false);
+
+            if (trustedUrl is null)
+            {
+                Console.WriteLine(
+                    "[ClassroomStorageDiag] Upload URL validation failed. " +
+                    $"AbsoluteUrl={Uri.TryCreate(rawUrl, UriKind.Absolute, out _)}; " +
+                    $"HasTokenQuery={hasTokenQuery}; " +
+                    $"HasExpectedRoute={rawUrl?.Contains(
+                        "/object/upload/sign/",
+                        StringComparison.OrdinalIgnoreCase) == true}");
+
+                return null;
+            }
+
+            string? token = null;
+
+            if (TryGetJsonProperty(root, "token", out var tokenElement) &&
+                tokenElement.ValueKind == JsonValueKind.String)
+            {
+                token = tokenElement.GetString();
+            }
+
+            // Fall back to the query token if the JSON token is null or empty.
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                token = GetQueryValue(trustedUrl, "token");
+            }
+
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                Console.WriteLine(
+                    "[ClassroomStorageDiag] Validated URL has no usable upload token.");
+                return null;
+            }
+
+            Console.WriteLine(
+                "[ClassroomStorageDiag] Signed upload URL validated successfully.");
+
+            return new ClassroomStorageUploadGrant(_bucket!, path, token, trustedUrl.AbsoluteUri);
+        }
+        catch (HttpRequestException ex)
+        {
+            Console.WriteLine(
+                $"[ClassroomStorageDiag] HTTP exception: {ex.GetType().Name}");
+            return null;
+        }
+        catch (JsonException ex)
+        {
+            Console.WriteLine(
+                $"[ClassroomStorageDiag] JSON parsing exception: {ex.GetType().Name}");
+            return null;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            Console.WriteLine("[ClassroomStorageDiag] Storage request timed out.");
+            return null;
+        }
+    }
+    public async Task<string?> CreateSignedDownloadUrlAsync(
+        Guid sessionId,
+        string objectPath,
+        int expiresInSeconds = 300,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryValidateObjectPath(sessionId, objectPath, out var normalizedPath, out var mimeType) ||
+            expiresInSeconds < 1 || expiresInSeconds > MaximumSignedUrlLifetimeSeconds ||
+            !await IsPrivateBucketReadyAsync(mimeType, cancellationToken))
+        {
+            return null;
+        }
+
+        var url = $"{_supabaseUrl}/storage/v1/object/sign/{Uri.EscapeDataString(_bucket!)}/{EncodePath(normalizedPath)}";
+        using var request = CreateAuthorizedRequest(HttpMethod.Post, url);
+        request.Content = JsonContent.Create(new { expiresIn = expiresInSeconds });
+
+        try
+        {
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode) return null;
+
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            using var document = JsonDocument.Parse(json);
+            if (!TryGetJsonProperty(document.RootElement, "signedURL", out var signedElement) ||
+                signedElement.ValueKind != JsonValueKind.String)
+            {
+                return null;
+            }
+
+            return ValidateStorageUrl(signedElement.GetString(), "download", normalizedPath)?.AbsoluteUri;
+        }
+        catch (HttpRequestException) { return null; }
+        catch (JsonException) { return null; }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return null; }
+    }
+
+    public async Task<bool> DeleteObjectAsync(
+        Guid sessionId,
+        string objectPath,
+        CancellationToken cancellationToken = default)
+    {
+        if (!TryValidateObjectPath(sessionId, objectPath, out var normalizedPath, out var mimeType) ||
+            !await IsPrivateBucketReadyAsync(mimeType, cancellationToken))
+        {
+            return false;
+        }
+
+        var url = $"{_supabaseUrl}/storage/v1/object/{Uri.EscapeDataString(_bucket!)}";
+        using var request = CreateAuthorizedRequest(HttpMethod.Delete, url);
+        request.Content = JsonContent.Create(new { prefixes = new[] { normalizedPath } });
+
+        try
+        {
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            return response.IsSuccessStatusCode;
+        }
+        catch (HttpRequestException) { return false; }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return false; }
+    }
+
+    private async Task<bool> IsPrivateBucketReadyAsync(string expectedMimeType, CancellationToken cancellationToken, long requiredSize = 1)
+    {
+        if (!IsConfigured) return false;
+
+        var url = $"{_supabaseUrl}/storage/v1/bucket/{Uri.EscapeDataString(_bucket!)}";
+        using var request = CreateAuthorizedRequest(HttpMethod.Get, url);
+        try
+        {
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode) return false;
+
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+
+            if (!TryGetJsonProperty(root, "public", out var publicElement) || publicElement.ValueKind != JsonValueKind.False)
+                return false;
+            if (!TryGetJsonProperty(root, "file_size_limit", out var sizeElement) &&
+                !TryGetJsonProperty(root, "fileSizeLimit", out sizeElement)) return false;
+            if (sizeElement.ValueKind != JsonValueKind.Number || !sizeElement.TryGetInt64(out var limit) ||
+                limit < requiredSize || limit > MaximumFileSizeBytes) return false;
+            if (!TryGetJsonProperty(root, "allowed_mime_types", out var typesElement) &&
+                !TryGetJsonProperty(root, "allowedMimeTypes", out typesElement)) return false;
+            if (typesElement.ValueKind != JsonValueKind.Array) return false;
+
+            return typesElement.EnumerateArray().Any(x =>
+                x.ValueKind == JsonValueKind.String &&
+                string.Equals(x.GetString(), expectedMimeType, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (HttpRequestException) { return false; }
+        catch (JsonException) { return false; }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return false; }
+    }
+
+    private Uri? ValidateStorageUrl(
+    string? value,
+    string kind,
+    string expectedObjectPath,
+    bool requireToken = true)
+    {
+        Uri? Reject(string reason)
+        {
+            Console.WriteLine(
+                $"[ClassroomStorageDiag] URL validation rejected: " +
+                $"Kind={kind}; Reason={reason}");
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(value))
+            return Reject("URL is empty.");
+
+        if (!Uri.TryCreate(_supabaseUrl, UriKind.Absolute, out var baseUri))
+            return Reject("Configured Supabase base URL is invalid.");
+
+        Uri uri;
+
+        if (Uri.TryCreate(value, UriKind.Absolute, out var absolute) &&
+            (absolute.Scheme == Uri.UriSchemeHttps ||
+             absolute.Scheme == Uri.UriSchemeHttp))
+        {
+            uri = absolute;
+        }
+        else
+        {
+            var relative = value.TrimStart('/');
+
+            if (relative.StartsWith("object/", StringComparison.Ordinal))
+            {
+                relative = "storage/v1/" + relative;
+            }
+
+            if (!relative.StartsWith("storage/v1/", StringComparison.Ordinal))
+            {
+                return Reject("Relative URL does not start with storage/v1/.");
+            }
+
+            if (!Uri.TryCreate(
+                new Uri(_supabaseUrl!.TrimEnd('/') + "/"),
+                relative,
+                out var relativeUri))
+            {
+                return Reject("Relative URL could not be resolved.");
+            }
+
+            uri = relativeUri;
+        }
+
+        if (!string.Equals(
+                uri.Scheme, baseUri.Scheme, StringComparison.OrdinalIgnoreCase))
+            return Reject($"Scheme mismatch; returned scheme={uri.Scheme}.");
+
+        if (!string.Equals(
+                uri.Host, baseUri.Host, StringComparison.OrdinalIgnoreCase))
+            return Reject("Host mismatch.");
+
+        if (uri.Port != baseUri.Port)
+            return Reject($"Port mismatch; returned port={uri.Port}.");
+
+        if (!string.IsNullOrEmpty(uri.UserInfo))
+            return Reject("URL contains user information.");
+
+        if (!string.IsNullOrEmpty(uri.Fragment))
+            return Reject("URL contains a fragment.");
+
+        if (requireToken && string.IsNullOrEmpty(GetQueryValue(uri, "token")))
+            return Reject("Required token query parameter is missing.");
+
+        var segments = uri.AbsolutePath.Split(
+            '/', StringSplitOptions.RemoveEmptyEntries);
+
+        var prefix = kind == "upload"
+            ? new[] { "storage", "v1", "object", "upload", "sign", _bucket! }
+            : new[] { "storage", "v1", "object", "sign", _bucket! };
+
+        if (segments.Length <= prefix.Length)
+        {
+            return Reject(
+                $"Path too short; segment count={segments.Length}; " +
+                $"required prefix length={prefix.Length}.");
+        }
+
+        for (var i = 0; i < prefix.Length; i++)
+        {
+            string actualSegment;
+
+            try
+            {
+                actualSegment = Uri.UnescapeDataString(segments[i]);
+            }
+            catch (UriFormatException)
+            {
+                return Reject($"Invalid URL encoding in route segment {i}.");
+            }
+
+            if (!string.Equals(
+                    actualSegment, prefix[i], StringComparison.Ordinal))
+            {
+                return Reject(
+                    $"Route segment mismatch at index {i}; " +
+                    $"expected='{prefix[i]}'; actual='{actualSegment}'.");
+            }
+        }
+
+        string returnedPath;
+
+        try
+        {
+            returnedPath = string.Join(
+                '/',
+                segments.Skip(prefix.Length).Select(Uri.UnescapeDataString));
+        }
+        catch (UriFormatException)
+        {
+            return Reject("Object path contains invalid URL encoding.");
+        }
+
+        if (!string.Equals(
+                returnedPath, expectedObjectPath, StringComparison.Ordinal))
+        {
+            var actualParts = returnedPath.Split('/');
+            var expectedParts = expectedObjectPath.Split('/');
+            var mismatchIndex = -1;
+
+            for (var i = 0; i < Math.Min(actualParts.Length, expectedParts.Length); i++)
+            {
+                if (!string.Equals(
+                        actualParts[i], expectedParts[i], StringComparison.Ordinal))
+                {
+                    mismatchIndex = i;
+                    break;
+                }
+            }
+
+            return Reject(
+                $"Object path mismatch; returned segment count={actualParts.Length}; " +
+                $"expected segment count={expectedParts.Length}; " +
+                $"first mismatch index={mismatchIndex}.");
+        }
+
+        Console.WriteLine(
+            $"[ClassroomStorageDiag] URL validation passed; Kind={kind}.");
+
+        return uri;
+    }
+
+    private static bool TryValidateObjectPath(Guid sessionId, string? path, out string normalizedPath, out string mimeType)
+    {
+        normalizedPath = string.Empty;
+        mimeType = string.Empty;
+        if (sessionId == Guid.Empty || string.IsNullOrWhiteSpace(path) || path.Length > 512 ||
+            path.Contains('\\') || path.Contains('?') || path.Contains('#') || path.Contains('%') || path.Any(char.IsControl))
+            return false;
+
+        var segments = path.Split('/', StringSplitOptions.None);
+        if (segments.Length != 3 || segments[0] != "classroom-sessions" ||
+            !Guid.TryParseExact(segments[1], "D", out var pathSessionId) || pathSessionId != sessionId ||
+            !string.Equals(segments[1], sessionId.ToString("D"), StringComparison.Ordinal)) return false;
+
+        var fileName = segments[2];
+        var extension = Path.GetExtension(fileName);
+        if (!AllowedMimeTypes.TryGetValue(extension, out var resolvedMimeType) || string.IsNullOrWhiteSpace(resolvedMimeType)) return false;
+        mimeType = resolvedMimeType;
+        var guidPart = fileName[..^extension.Length];
+        if (!Guid.TryParseExact(guidPart, "N", out var fileGuid) ||
+            !string.Equals(guidPart, fileGuid.ToString("N"), StringComparison.Ordinal)) return false;
+
+        extension = extension.ToLowerInvariant();
+        normalizedPath = $"classroom-sessions/{sessionId:D}/{fileGuid:N}{extension}";
+        return string.Equals(path, normalizedPath, StringComparison.Ordinal);
+    }
+
+    private HttpRequestMessage CreateAuthorizedRequest(HttpMethod method, string url)
+    {
+        var request = new HttpRequestMessage(method, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _serviceKey);
+        request.Headers.TryAddWithoutValidation("apikey", _serviceKey);
+        return request;
+    }
+
+    private static string EncodePath(string path) => string.Join('/', path.Split('/').Select(Uri.EscapeDataString));
+
+    private static string? GetQueryValue(Uri uri, string name)
+    {
+        foreach (var part in uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var separator = part.IndexOf('=');
+            var key = separator < 0 ? part : part[..separator];
+            if (!string.Equals(Uri.UnescapeDataString(key), name, StringComparison.OrdinalIgnoreCase)) continue;
+            return separator < 0 ? string.Empty : Uri.UnescapeDataString(part[(separator + 1)..]);
+        }
+        return null;
+    }
+
+    private static bool TryGetJsonProperty(JsonElement element, string name, out JsonElement value)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = property.Value;
+                    return true;
+                }
+            }
+        }
+        value = default;
+        return false;
+    }
+}

@@ -1,4 +1,4 @@
-﻿using System.Security.Claims;
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -146,8 +146,15 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> ForgotPassword(
         [FromBody] ForgotPasswordRequest request)
     {
-        await _authService.ForgotPasswordAsync(
-            request.Email);
+        try
+        {
+            await _authService.ForgotPasswordAsync(request.Email);
+        }
+        catch (SeOne.Application.Exceptions.DeliveryNotConfiguredException)
+        {
+            // The sender logs a generic configuration warning without secrets.
+            // Keep this response generic to prevent account enumeration.
+        }
 
         /*
          * Always return 204 so the API does not reveal
