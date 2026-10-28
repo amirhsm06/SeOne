@@ -302,12 +302,86 @@ public class UserSettingsController : ApiControllerBase
     }
     private static object GetPreferences(string? json)
     {
-        var defaults = new Dictionary<string, object?> { ["email"] = new Dictionary<string,bool> { ["booking"]=true,["payment"]=true,["assignment"]=true,["message"]=true,["promotion"]=true,["newsletter"]=true }, ["push"] = new Dictionary<string,bool> { ["booking"]=true,["payment"]=true,["assignment"]=true,["message"]=true,["promotion"]=true }, ["inApp"] = new Dictionary<string,bool> { ["booking"]=true,["payment"]=true,["assignment"]=true,["message"]=true,["promotion"]=true } };
-        if (string.IsNullOrWhiteSpace(json)) return defaults;
-        try { var current = JsonSerializer.Deserialize<Dictionary<string, object?>>(json) ?? new(); var clone = JsonSerializer.SerializeToElement(defaults); var merged = JsonSerializer.Deserialize<Dictionary<string, object?>>(clone.GetRawText())!; MergeObjectDictionary(merged, current); return merged; } catch { return defaults; }
+        var defaults = new Dictionary<string, object?>
+        {
+            ["email"] = new Dictionary<string, object?>
+            {
+                ["booking"] = true,
+                ["payment"] = true,
+                ["assignment"] = true,
+                ["message"] = true,
+                ["promotion"] = true,
+                ["newsletter"] = true
+            },
+            ["push"] = new Dictionary<string, object?>
+            {
+                ["booking"] = true,
+                ["payment"] = true,
+                ["assignment"] = true,
+                ["message"] = true,
+                ["promotion"] = true
+            },
+            ["inApp"] = new Dictionary<string, object?>
+            {
+                ["booking"] = true,
+                ["payment"] = true,
+                ["assignment"] = true,
+                ["message"] = true,
+                ["promotion"] = true
+            }
+        };
+
+        if (string.IsNullOrWhiteSpace(json))
+            return defaults;
+
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+
+            MergePreferenceDefaults(
+                defaults,
+                document.RootElement);
+
+            return defaults;
+        }
+        catch
+        {
+            return defaults;
+        }
+    }
+
+    private static void MergePreferenceDefaults(
+        Dictionary<string, object?> target,
+        JsonElement source)
+    {
+        if (source.ValueKind != JsonValueKind.Object)
+            return;
+
+        foreach (var property in source.EnumerateObject())
+        {
+            if (property.Value.ValueKind == JsonValueKind.Object)
+            {
+                if (target.TryGetValue(property.Name, out var existing) &&
+                    existing is Dictionary<string, object?> child)
+                {
+                    MergePreferenceDefaults(child, property.Value);
+                }
+                else
+                {
+                    var newChild = new Dictionary<string, object?>();
+
+                    MergePreferenceDefaults(newChild, property.Value);
+
+                    target[property.Name] = newChild;
+                }
+            }
+            else
+            {
+                target[property.Name] = property.Value.Clone();
+            }
+        }
     }
     private static void MergeJson(Dictionary<string, object?> target, JsonElement element) { if (element.ValueKind != JsonValueKind.Object) return; foreach (var p in element.EnumerateObject()) { if (p.Value.ValueKind == JsonValueKind.Object) { var child = target.TryGetValue(p.Name, out var o) && o is JsonElement je && je.ValueKind == JsonValueKind.Object ? JsonSerializer.Deserialize<Dictionary<string, object?>>(je.GetRawText())! : new(); MergeJson(child, p.Value); target[p.Name] = child; } else target[p.Name] = JsonSerializer.Deserialize<object?>(p.Value.GetRawText()); } }
-    private static void MergeObjectDictionary(Dictionary<string, object?> target, Dictionary<string, object?> source) { foreach (var p in source) target[p.Key] = p.Value; }
     private static string GenerateCode(int length) => Convert.ToHexString(RandomNumberGenerator.GetBytes((length + 1) / 2)).ToLowerInvariant()[..length];
     private static string GenerateBase32Secret(int bytes) { const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"; var data = RandomNumberGenerator.GetBytes(bytes); var sb = new StringBuilder(); var buffer = 0; var bits = 0; foreach (var b in data) { buffer = (buffer << 8) | b; bits += 8; while (bits >= 5) { bits -= 5; sb.Append(alphabet[(buffer >> bits) & 31]); } } if (bits > 0) sb.Append(alphabet[(buffer << (5 - bits)) & 31]); return sb.ToString(); }
     private static bool VerifyTotpAgainstSecret(string code, string? secret)
