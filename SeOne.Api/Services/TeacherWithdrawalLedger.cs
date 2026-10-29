@@ -41,6 +41,7 @@ public static class TeacherWithdrawalLedger
             .ToList();
 
         var currencies = bookings
+            .Where(b => b.Amount > 0m)
             .Select(b => string.IsNullOrWhiteSpace(b.Currency) ? "IRR" : b.Currency.Trim().ToUpperInvariant())
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();

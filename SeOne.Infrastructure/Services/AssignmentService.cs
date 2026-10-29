@@ -393,6 +393,14 @@ public class AssignmentService : IAssignmentService
             return null;
         }
 
+        if (!AreStudentSubmissionAttachmentsValid(
+        request.Attachments,
+        studentId,
+        assignmentId))
+        {
+            return null;
+        }
+
         var existing =
             await _context.Set<AssignmentSubmission>()
                 .FirstOrDefaultAsync(x =>
@@ -468,6 +476,15 @@ public class AssignmentService : IAssignmentService
                 .AnyAsync(x => x.StudentId == studentId && x.CourseId == assignment.CourseId, cancellationToken))
         {
             return new SubmissionOperationResult(SubmissionOperationOutcome.AssignmentUnavailable);
+        }
+
+        if (!AreStudentSubmissionAttachmentsValid(
+        request.Attachments,
+        studentId,
+        assignmentId))
+        {
+            return new SubmissionOperationResult(
+                SubmissionOperationOutcome.InvalidRequest);
         }
 
         var submission = await _context.Set<AssignmentSubmission>()
@@ -553,6 +570,15 @@ public class AssignmentService : IAssignmentService
             .FirstOrDefaultAsync(x => x.Id == submissionId && x.StudentId == studentId, cancellationToken);
         if (submission is null)
             return new SubmissionOperationResult(SubmissionOperationOutcome.SubmissionNotFound);
+
+        if (!AreStudentSubmissionAttachmentsValid(
+        request.Attachments,
+        studentId,
+        submission.AssignmentId))
+        {
+            return new SubmissionOperationResult(
+                SubmissionOperationOutcome.InvalidRequest);
+        }
 
         var assignment = await _context.Set<Assignment>()
             .AsNoTracking()
@@ -647,6 +673,15 @@ public class AssignmentService : IAssignmentService
             return null;
         }
 
+        if (request.Attachments is not null &&
+        !AreStudentSubmissionAttachmentsValid(
+        request.Attachments,
+        studentId,
+        submission.AssignmentId))
+        {
+            return null;
+        }
+
         if (request.Content is not null &&
             !IsValidText(request.Content, 20000))
         {
@@ -717,6 +752,59 @@ public class AssignmentService : IAssignmentService
         return attachments.All(x =>
             !string.IsNullOrWhiteSpace(x) &&
             x.Length <= 1000);
+    }
+
+    private static bool AreStudentSubmissionAttachmentsValid(
+    List<string>? attachments,
+    Guid studentId,
+    Guid assignmentId)
+    {
+        if (!AreAttachmentsValid(attachments))
+            return false;
+
+        if (attachments is null)
+            return true;
+
+        var expectedPrefix =
+            $"student-assignments/{studentId:D}/{assignmentId:D}/";
+
+        foreach (var reference in attachments)
+        {
+            if (string.IsNullOrWhiteSpace(reference) ||
+                !string.Equals(
+                    reference,
+                    reference.Trim(),
+                    StringComparison.Ordinal) ||
+                !reference.StartsWith(
+                    expectedPrefix,
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var fileName = reference[expectedPrefix.Length..];
+
+            // The upload service creates a GUID-N filename with an allowed extension.
+            if (fileName.Contains('/') || fileName.Contains('\\'))
+                return false;
+
+            var extensionIndex = fileName.LastIndexOf('.');
+            if (extensionIndex <= 0)
+                return false;
+
+            var fileId = fileName[..extensionIndex];
+            var extension = fileName[extensionIndex..].ToLowerInvariant();
+
+            if (!Guid.TryParseExact(fileId, "N", out _) ||
+                extension is not (
+                    ".pdf" or ".docx" or ".jpg" or
+                    ".jpeg" or ".png" or ".webp"))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static System.Linq.Expressions.Expression<

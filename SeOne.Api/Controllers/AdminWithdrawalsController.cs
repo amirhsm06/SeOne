@@ -166,7 +166,16 @@ public sealed class AdminWithdrawalsController : ControllerBase
         return Ok(new
         {
             id = withdrawal.Id,
+            teacherId = withdrawal.TeacherId,
+            teacherName = string.IsNullOrWhiteSpace(teacher.FullName)
+                ? (teacher.FirstName + " " + teacher.FamilyName).Trim()
+                : teacher.FullName,
+            teacherEmail = teacher.Email ?? string.Empty,
+            amount = withdrawal.Amount,
+            currency = withdrawal.Currency,
+            iban = withdrawal.Iban,
             status = withdrawal.Status,
+            requestedAt = withdrawal.RequestedAt,
             decidedAt = withdrawal.DecidedAt,
             decidedById = withdrawal.DecidedById
         });
