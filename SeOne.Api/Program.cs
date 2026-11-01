@@ -183,11 +183,12 @@ static async Task SeedAdminAsync(WebApplication app)
 	var password = app.Configuration["SEONE_ADMIN_PASSWORD"];
 	var fullName = app.Configuration["SEONE_ADMIN_NAME"] ?? "SE ONE Administrator";
 
-	if (string.IsNullOrWhiteSpace(email))
-    		throw new InvalidOperationException("SEONE_ADMIN_EMAIL is missing from production configuration.");
-
-	if (string.IsNullOrWhiteSpace(password))
-    		throw new InvalidOperationException("SEONE_ADMIN_PASSWORD is missing from production configuration.");
+    if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
+    {
+        app.Logger.LogWarning(
+            "Admin seeding skipped because SEONE_ADMIN_EMAIL or SEONE_ADMIN_PASSWORD is not configured.");
+        return;
+    }
 
     using var scope = app.Services.CreateScope();
     var userManager = scope.ServiceProvider.GetRequiredService<UserManager<User>>();

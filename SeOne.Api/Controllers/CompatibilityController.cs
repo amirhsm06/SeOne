@@ -563,6 +563,15 @@ public class CompatibilityController : ApiControllerBase
         return Ok(slots.Select(MapAvailability));
     }
 
+    [HttpGet("teacher/class-slots")]
+    [Authorize(Roles = "Teacher")]
+    public async Task<IActionResult> MyClassSlots()
+    {
+        var teacherId = RequireUserId();
+        var slots = await _availabilityService.GetMyAvailabilityAsync(teacherId);
+        return Ok(slots.Select(MapAvailability));
+    }
+
     [HttpPut("teacher/availability")]
     [Authorize(Roles = "Teacher")]
     public async Task<IActionResult> ReplaceAvailability([FromBody] TeacherAvailabilityReplacementRequest? request)

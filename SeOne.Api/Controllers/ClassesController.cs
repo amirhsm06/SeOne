@@ -42,8 +42,11 @@ public sealed class ClassesController : ApiControllerBase
             !string.Equals(type, "private", StringComparison.OrdinalIgnoreCase))
             return BadRequest(new { message = "Type must be public or private." });
 
+        // Build base query with proper includes
         var query = _db.Set<CourseClass>()
             .AsNoTracking()
+            .Include(x => x.Teacher)
+            .Include(x => x.Course)
             .Where(classItem => classItem.Status == "scheduled");
 
         if (teacherId.HasValue)
@@ -54,55 +57,90 @@ public sealed class ClassesController : ApiControllerBase
             query = query.Where(classItem => classItem.Level == level.Trim());
         if (!string.IsNullOrWhiteSpace(subject))
             query = query.Where(classItem => classItem.Subject == subject.Trim());
-        if (availableOnly == true)
-            query = query.Where(classItem => _db.Set<ClassEnrollment>().Count(enrollment => enrollment.ClassId == classItem.Id && enrollment.Status != "cancelled") < classItem.MaxCapacity);
 
+        // Get total count before pagination
         var totalCount = await query.CountAsync(cancellationToken);
-        var rows = await query
+
+        // Fetch paginated classes with enrollment counts
+        var classIds = await query
             .OrderBy(classItem => classItem.ScheduledDate)
             .ThenBy(classItem => classItem.StartTime)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
-            .Select(classItem => new
-            {
-                Class = classItem,
-                CurrentEnrollment = _db.Set<ClassEnrollment>().Count(enrollment => enrollment.ClassId == classItem.Id && enrollment.Status != "cancelled"),
-                TeacherAvatar = _db.Set<TeacherProfile>().Where(profile => profile.TeacherId == classItem.TeacherId).Select(profile => profile.Avatar).FirstOrDefault(),
-                TeacherRating = _db.Set<TeacherProfile>().Where(profile => profile.TeacherId == classItem.TeacherId).Select(profile => profile.Rating).FirstOrDefault()
-            })
+            .Select(x => x.Id)
             .ToListAsync(cancellationToken);
 
-        var items = rows.Select(row => new CourseClassDto
+        // Get classes with enrollments in one query
+        var classesWithData = await _db.Set<CourseClass>()
+            .AsNoTracking()
+            .Include(x => x.Teacher)
+            .Include(x => x.Course)
+            .Where(x => classIds.Contains(x.Id))
+            .ToListAsync(cancellationToken);
+
+        // Get enrollment counts for all classes
+        var enrollmentCounts = await _db.Set<ClassEnrollment>()
+            .AsNoTracking()
+            .Where(x => classIds.Contains(x.ClassId) && x.Status != "cancelled")
+            .GroupBy(x => x.ClassId)
+            .Select(g => new { ClassId = g.Key, Count = g.Count() })
+            .ToListAsync(cancellationToken);
+
+        var enrollmentDict = enrollmentCounts.ToDictionary(x => x.ClassId, x => x.Count);
+
+        // Get teacher profiles for avatars/ratings
+        var teacherIds = classesWithData.Select(x => x.TeacherId).Distinct().ToList();
+        var teacherProfiles = await _db.Set<TeacherProfile>()
+            .AsNoTracking()
+            .Where(x => teacherIds.Contains(x.TeacherId))
+            .ToDictionaryAsync(x => x.TeacherId, cancellationToken);
+
+        // Filter by available only (after getting counts)
+        if (availableOnly == true)
         {
-            Id = row.Class.Id,
-            Title = row.Class.Title,
-            Description = row.Class.Description,
-            Level = row.Class.Level,
-            Subject = row.Class.Subject,
-            Type = row.Class.Type,
-            MaxCapacity = row.Class.MaxCapacity,
-            CurrentEnrollment = row.CurrentEnrollment,
-            RemainingCapacity = Math.Max(0, row.Class.MaxCapacity - row.CurrentEnrollment),
-            BasePrice = row.Class.BasePrice,
-            FinalPrice = GetFinalPrice(row.Class, row.CurrentEnrollment),
-            ScheduledDate = DateTime.SpecifyKind(row.Class.ScheduledDate.Date + row.Class.StartTime, DateTimeKind.Utc),
-            StartTime = row.Class.StartTime.ToString(@"hh\:mm", CultureInfo.InvariantCulture),
-            EndTime = row.Class.EndTime.ToString(@"hh\:mm", CultureInfo.InvariantCulture),
-            TimeZone = row.Class.TimeZone,
-            Status = row.Class.Status,
-            Teacher = new ClassTeacherDto
+            classesWithData = classesWithData
+                .Where(x => (enrollmentDict.TryGetValue(x.Id, out var count) ? count : 0) < x.MaxCapacity)
+                .ToList();
+        }
+
+        // Map to DTOs
+        var items = classesWithData.Select(classItem =>
+        {
+            var currentEnrollment = enrollmentDict.TryGetValue(classItem.Id, out var count) ? count : 0;
+            teacherProfiles.TryGetValue(classItem.TeacherId, out var profile);
+
+            return new CourseClassDto
             {
-                Id = row.Class.TeacherId,
-                Name = row.Class.Teacher.FullName,
-                Avatar = row.TeacherAvatar ?? row.Class.Teacher.AvatarUrl,
-                Rating = row.TeacherRating
-            },
-            Course = new ClassCourseDto
-            {
-                Id = row.Class.CourseId,
-                Title = row.Class.Course.Title,
-                ImageUrl = row.Class.Course.ImageUrl
-            }
+                Id = classItem.Id,
+                Title = classItem.Title,
+                Description = classItem.Description,
+                Level = classItem.Level,
+                Subject = classItem.Subject,
+                Type = classItem.Type,
+                MaxCapacity = classItem.MaxCapacity,
+                CurrentEnrollment = currentEnrollment,
+                RemainingCapacity = Math.Max(0, classItem.MaxCapacity - currentEnrollment),
+                BasePrice = classItem.BasePrice,
+                FinalPrice = GetFinalPrice(classItem, currentEnrollment),
+                ScheduledDate = DateTime.SpecifyKind(classItem.ScheduledDate.Date + classItem.StartTime, DateTimeKind.Utc),
+                StartTime = classItem.StartTime.ToString(@"hh\:mm", CultureInfo.InvariantCulture),
+                EndTime = classItem.EndTime.ToString(@"hh\:mm", CultureInfo.InvariantCulture),
+                TimeZone = classItem.TimeZone,
+                Status = classItem.Status,
+                Teacher = new ClassTeacherDto
+                {
+                    Id = classItem.TeacherId,
+                    Name = classItem.Teacher.FullName,
+                    Avatar = profile?.Avatar ?? classItem.Teacher.AvatarUrl,
+                    Rating = profile?.Rating ?? 0
+                },
+                Course = new ClassCourseDto
+                {
+                    Id = classItem.CourseId,
+                    Title = classItem.Course.Title,
+                    ImageUrl = classItem.Course.ImageUrl
+                }
+            };
         }).ToList();
 
         return Ok(new PagedResult<CourseClassDto>
