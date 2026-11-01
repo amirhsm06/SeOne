@@ -11,6 +11,8 @@ public class Payment
 
     public Guid CourseId { get; set; }
 
+    public Guid? ClassEnrollmentId { get; set; }
+
     public decimal Amount { get; set; }
 
     public string Currency { get; set; } = "USD";
@@ -25,11 +27,21 @@ public class Payment
 
     public string? FailureReason { get; set; }
 
+    public string? ReceiptObjectPath { get; set; }
+
+    public string? RejectionReason { get; set; }
+
+    public DateTime? VerifiedAt { get; set; }
+
+    public Guid? VerifiedBy { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public DateTime? PaidAt { get; set; }
 
     public Course Course { get; set; } = null!;
+
+    public ClassEnrollment? ClassEnrollment { get; set; }
 
     public User Student { get; set; } = null!;
 }

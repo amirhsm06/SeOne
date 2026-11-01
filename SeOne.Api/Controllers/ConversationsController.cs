@@ -188,8 +188,11 @@ public class ConversationsController : ControllerBase
         if (messageForUpdate.Attachments.Count >= maximumAttachments)
             return BadRequest(new { message = "Maximum 5 attachments per message." });
 
+        var storedFileName = CreateStoredAttachmentFileName(
+            attachment.FileName,
+            extension);
         var objectPath =
-            $"private-messaging/{conversationId:D}/{messageId:D}/{Guid.NewGuid():N}{extension.ToLowerInvariant()}";
+            $"private-messaging/{conversationId:D}/{messageId:D}/{storedFileName}";
 
         bool uploaded;
 
@@ -455,5 +458,29 @@ public class ConversationsController : ControllerBase
         }
 
         return userId;
+    }
+
+    private static string CreateStoredAttachmentFileName(
+        string originalFileName,
+        string extension)
+    {
+        var fileName = originalFileName.Replace('\\', '/');
+        fileName = fileName[(fileName.LastIndexOf('/') + 1)..];
+
+        var fileNameWithoutExtension = Path.GetFileNameWithoutExtension(fileName);
+        var safeName = new string(
+                fileNameWithoutExtension
+                    .Where(character =>
+                        char.IsLetterOrDigit(character) ||
+                        character is ' ' or '-' or '_' or '.' or '(' or ')')
+                    .Take(100)
+                    .ToArray())
+            .Trim(' ', '.');
+
+        if (string.IsNullOrWhiteSpace(safeName))
+            safeName = "attachment";
+
+        return
+            $"{Guid.NewGuid():N}__{safeName}{extension.ToLowerInvariant()}";
     }
 }

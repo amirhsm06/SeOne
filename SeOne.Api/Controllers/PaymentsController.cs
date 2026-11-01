@@ -1,5 +1,6 @@
 ﻿using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using SeOne.Application.DTOs;
 using SeOne.Application.Interfaces;
@@ -100,6 +101,92 @@ public class PaymentsController : ControllerBase
         }
 
         return Ok(result);
+    }
+
+    [HttpPost("manual-class-receipt/{classEnrollmentId:guid}")]
+    public async Task<ActionResult<ReceiptUploadResponse>> UploadManualReceipt(
+        Guid classEnrollmentId,
+        [FromForm] IFormFile receiptFile,
+        [FromForm] string note = "")
+    {
+        var studentId = GetUserId();
+
+        if (receiptFile == null || receiptFile.Length == 0)
+        {
+            return BadRequest(new { message = "Receipt file is required." });
+        }
+
+        try
+        {
+            using var stream = receiptFile.OpenReadStream();
+            var result = await _paymentService
+                .UploadReceiptAsync(
+                    studentId,
+                    classEnrollmentId,
+                    receiptFile.FileName,
+                    receiptFile.ContentType,
+                    stream,
+                    note);
+
+            if (result is null)
+            {
+                return BadRequest(new { message = "Receipt upload failed." });
+            }
+
+            return Ok(result);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
+    [HttpGet("pending-receipts")]
+    [Authorize(Roles = "Admin,Teacher")]
+    public async Task<ActionResult<List<PendingReceiptDto>>> GetPendingReceipts()
+    {
+        return Ok(
+            await _paymentService
+                .GetPendingReceiptsAsync());
+    }
+
+    [HttpPut("{paymentId:guid}/verify-receipt")]
+    [Authorize(Roles = "Admin")]
+    public async Task<ActionResult<VerifyReceiptResponse>> VerifyReceipt(
+        Guid paymentId,
+        [FromBody] VerifyReceiptRequest request)
+    {
+        var adminId = GetUserId();
+
+        try
+        {
+            var result = await _paymentService
+                .VerifyReceiptAsync(
+                    paymentId,
+                    adminId,
+                    request.IsApproved,
+                    request.RejectionReason);
+
+            if (result is null)
+            {
+                return NotFound();
+            }
+
+            return Ok(result);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
+    [HttpGet("manual-payment-settings")]
+    [AllowAnonymous]
+    public async Task<ActionResult<ManualPaymentSettingsDto>> GetManualPaymentSettings()
+    {
+        return Ok(
+            await _paymentService
+                .GetManualPaymentSettingsAsync());
     }
 
     private Guid GetUserId()

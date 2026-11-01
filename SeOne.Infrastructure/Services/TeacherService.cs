@@ -17,7 +17,7 @@ public class TeacherService : ITeacherService
 
     public async Task<List<TeacherDto>> GetAllTeachersAsync()
     {
-        return await _context.Users
+        var teachers = await _context.Users
             .Where(u => u.Role == UserRole.Teacher)
             .Select(u => new TeacherDto
             {
@@ -37,6 +37,12 @@ public class TeacherService : ITeacherService
                 Rating = _context.Set<Domain.Entities.TeacherProfile>().Where(p => p.TeacherId == u.Id).Select(p => p.Rating).FirstOrDefault()
             })
             .ToListAsync();
+
+        var slotsByTeacher = await LoadAvailableSlotsAsync(teachers.Select(teacher => teacher.Id));
+        foreach (var teacher in teachers)
+            teacher.Slots = slotsByTeacher.GetValueOrDefault(teacher.Id) ?? [];
+
+        return teachers;
     }
 
     public async Task<TeacherDto?> GetTeacherByIdAsync(Guid teacherId)
@@ -47,6 +53,7 @@ public class TeacherService : ITeacherService
             return null;
 
         var profile = await _context.Set<Domain.Entities.TeacherProfile>().FirstOrDefaultAsync(p => p.TeacherId == teacherId);
+        var slotsByTeacher = await LoadAvailableSlotsAsync([teacherId]);
 
         return new TeacherDto
         {
@@ -62,7 +69,8 @@ public class TeacherService : ITeacherService
             Subject = profile?.Subject,
             Level = profile?.Level,
             Bio = profile?.Bio,
-            Rating = profile?.Rating ?? 0m
+            Rating = profile?.Rating ?? 0m,
+            Slots = slotsByTeacher.GetValueOrDefault(teacherId) ?? []
         };
     }
 
@@ -176,5 +184,38 @@ public class TeacherService : ITeacherService
         await _context.SaveChangesAsync();
 
         return true;
+    }
+
+    private async Task<Dictionary<Guid, List<TeacherAvailabilitySlotDto>>> LoadAvailableSlotsAsync(IEnumerable<Guid> teacherIds)
+    {
+        var ids = teacherIds.ToArray();
+        if (ids.Length == 0)
+            return [];
+
+        var slots = await _context.Set<Domain.Entities.TeacherAvailability>()
+            .Where(slot => ids.Contains(slot.TeacherId) && slot.IsAvailable)
+            .OrderBy(slot => slot.DayOfWeek)
+            .ThenBy(slot => slot.StartTime)
+            .Select(slot => new
+            {
+                slot.TeacherId,
+                slot.Id,
+                slot.DayOfWeek,
+                slot.StartTime,
+                slot.EndTime
+            })
+            .ToListAsync();
+
+        return slots
+            .GroupBy(slot => slot.TeacherId)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(slot => new TeacherAvailabilitySlotDto
+                {
+                    Id = slot.Id,
+                    Day = slot.DayOfWeek.ToString(),
+                    Time = $"{slot.StartTime:hh\\:mm} - {slot.EndTime:hh\\:mm}",
+                    Booked = false
+                }).ToList());
     }
 }

@@ -23,4 +23,17 @@ public class TeacherDto
     public decimal Rating { get; set; }
 
     public string? Bio { get; set; }
+
+    public List<TeacherAvailabilitySlotDto> Slots { get; set; } = [];
+}
+
+public sealed class TeacherAvailabilitySlotDto
+{
+    public Guid Id { get; set; }
+
+    public string Day { get; set; } = string.Empty;
+
+    public string Time { get; set; } = string.Empty;
+
+    public bool Booked { get; set; }
 }

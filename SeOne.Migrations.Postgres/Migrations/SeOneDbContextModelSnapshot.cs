@@ -466,6 +466,90 @@ namespace SeOne.Migrations.Postgres.Migrations
                     b.ToTable("Bookings");
                 });
 
+            modelBuilder.Entity("SeOne.Domain.Entities.ClassEnrollment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("CancelledAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("ClassId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("DiscountPercent")
+                        .HasPrecision(5, 2)
+                        .HasColumnType("numeric(5,2)");
+
+                    b.Property<DateTime>("EnrolledAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<decimal>("FinalPrice")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("InviteCode")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<Guid?>("InvitedByStudentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<Guid>("StudentId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InvitedByStudentId");
+
+                    b.HasIndex("StudentId");
+
+                    b.HasIndex("ClassId", "Status");
+
+                    b.HasIndex("ClassId", "StudentId")
+                        .IsUnique();
+
+                    b.ToTable("ClassEnrollments", (string)null);
+                });
+
+            modelBuilder.Entity("SeOne.Domain.Entities.ClassInvite", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ClassId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CreatedById")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.HasIndex("CreatedById");
+
+                    b.HasIndex("ClassId", "CreatedAt");
+
+                    b.ToTable("ClassInvites", (string)null);
+                });
+
             modelBuilder.Entity("SeOne.Domain.Entities.ClassroomAttendance", b =>
                 {
                     b.Property<Guid>("Id")
@@ -741,6 +825,87 @@ namespace SeOne.Migrations.Postgres.Migrations
                     b.ToTable("Course");
                 });
 
+            modelBuilder.Entity("SeOne.Domain.Entities.CourseClass", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("BasePrice")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<Guid>("CourseId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)");
+
+                    b.Property<TimeSpan>("EndTime")
+                        .HasColumnType("time");
+
+                    b.Property<string>("Level")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<int>("MaxCapacity")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("MeetingUrl")
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)");
+
+                    b.Property<DateTime>("ScheduledDate")
+                        .HasColumnType("date");
+
+                    b.Property<TimeSpan>("StartTime")
+                        .HasColumnType("time");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<Guid>("TeacherId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("TimeZone")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CourseId");
+
+                    b.HasIndex("Status", "ScheduledDate");
+
+                    b.HasIndex("TeacherId", "ScheduledDate", "Status");
+
+                    b.ToTable("CourseClasses", (string)null);
+                });
+
             modelBuilder.Entity("SeOne.Domain.Entities.CourseInstance", b =>
                 {
                     b.Property<Guid>("Id")
@@ -980,6 +1145,36 @@ namespace SeOne.Migrations.Postgres.Migrations
                         .IsUnique();
 
                     b.ToTable("LessonProgress", (string)null);
+                });
+
+            modelBuilder.Entity("SeOne.Domain.Entities.ManualPaymentSettings", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AllowedMimeTypes")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<long>("MaxReceiptSizeBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("WhatsAppContactNumber")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("ManualPaymentSettings", (string)null);
                 });
 
             modelBuilder.Entity("SeOne.Domain.Entities.Message", b =>
@@ -1238,6 +1433,9 @@ namespace SeOne.Migrations.Postgres.Migrations
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
 
+                    b.Property<Guid?>("ClassEnrollmentId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("ClientSecret")
                         .IsRequired()
                         .HasMaxLength(500)
@@ -1270,13 +1468,29 @@ namespace SeOne.Migrations.Postgres.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
+                    b.Property<string>("ReceiptObjectPath")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<string>("RejectionReason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
                     b.Property<int>("Status")
                         .HasColumnType("integer");
 
                     b.Property<Guid>("StudentId")
                         .HasColumnType("uuid");
 
+                    b.Property<DateTime?>("VerifiedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("VerifiedBy")
+                        .HasColumnType("uuid");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("ClassEnrollmentId");
 
                     b.HasIndex("CourseId");
 
@@ -2117,6 +2331,51 @@ namespace SeOne.Migrations.Postgres.Migrations
                     b.Navigation("Teacher");
                 });
 
+            modelBuilder.Entity("SeOne.Domain.Entities.ClassEnrollment", b =>
+                {
+                    b.HasOne("SeOne.Domain.Entities.CourseClass", "CourseClass")
+                        .WithMany("Enrollments")
+                        .HasForeignKey("ClassId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("SeOne.Domain.Entities.User", "InvitedByStudent")
+                        .WithMany()
+                        .HasForeignKey("InvitedByStudentId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("SeOne.Domain.Entities.User", "Student")
+                        .WithMany()
+                        .HasForeignKey("StudentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("CourseClass");
+
+                    b.Navigation("InvitedByStudent");
+
+                    b.Navigation("Student");
+                });
+
+            modelBuilder.Entity("SeOne.Domain.Entities.ClassInvite", b =>
+                {
+                    b.HasOne("SeOne.Domain.Entities.CourseClass", "CourseClass")
+                        .WithMany("Invites")
+                        .HasForeignKey("ClassId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("SeOne.Domain.Entities.User", "CreatedBy")
+                        .WithMany()
+                        .HasForeignKey("CreatedById")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("CourseClass");
+
+                    b.Navigation("CreatedBy");
+                });
+
             modelBuilder.Entity("SeOne.Domain.Entities.ClassroomAttendance", b =>
                 {
                     b.HasOne("SeOne.Domain.Entities.ClassroomSession", "Session")
@@ -2208,6 +2467,25 @@ namespace SeOne.Migrations.Postgres.Migrations
                     b.Navigation("Conversation");
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("SeOne.Domain.Entities.CourseClass", b =>
+                {
+                    b.HasOne("SeOne.Domain.Entities.Course", "Course")
+                        .WithMany()
+                        .HasForeignKey("CourseId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SeOne.Domain.Entities.User", "Teacher")
+                        .WithMany()
+                        .HasForeignKey("TeacherId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Course");
+
+                    b.Navigation("Teacher");
                 });
 
             modelBuilder.Entity("SeOne.Domain.Entities.CourseInstance", b =>
@@ -2367,6 +2645,11 @@ namespace SeOne.Migrations.Postgres.Migrations
 
             modelBuilder.Entity("SeOne.Domain.Entities.Payment", b =>
                 {
+                    b.HasOne("SeOne.Domain.Entities.ClassEnrollment", "ClassEnrollment")
+                        .WithMany("Payments")
+                        .HasForeignKey("ClassEnrollmentId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("SeOne.Domain.Entities.Course", "Course")
                         .WithMany()
                         .HasForeignKey("CourseId")
@@ -2378,6 +2661,8 @@ namespace SeOne.Migrations.Postgres.Migrations
                         .HasForeignKey("StudentId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.Navigation("ClassEnrollment");
 
                     b.Navigation("Course");
 
@@ -2600,6 +2885,11 @@ namespace SeOne.Migrations.Postgres.Migrations
                     b.Navigation("Submissions");
                 });
 
+            modelBuilder.Entity("SeOne.Domain.Entities.ClassEnrollment", b =>
+                {
+                    b.Navigation("Payments");
+                });
+
             modelBuilder.Entity("SeOne.Domain.Entities.ClassroomSession", b =>
                 {
                     b.Navigation("Attendance");
@@ -2612,6 +2902,13 @@ namespace SeOne.Migrations.Postgres.Migrations
                     b.Navigation("Messages");
 
                     b.Navigation("Participants");
+                });
+
+            modelBuilder.Entity("SeOne.Domain.Entities.CourseClass", b =>
+                {
+                    b.Navigation("Enrollments");
+
+                    b.Navigation("Invites");
                 });
 
             modelBuilder.Entity("SeOne.Domain.Entities.CourseInstance", b =>

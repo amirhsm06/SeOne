@@ -81,11 +81,30 @@ public class MessageDto
 
     public List<string> Attachments { get; set; } = new();
 
+    public List<MessageAttachmentDto> AttachmentDetails { get; set; } = new();
+
     public DateTime CreatedAt { get; set; }
 
     public bool IsRead { get; set; }
 
     public DateTime? ReadAt { get; set; }
+}
+
+public class MessageAttachmentDto
+{
+    public string DisplayName { get; set; } = string.Empty;
+
+    public string DownloadUrl { get; set; } = string.Empty;
+
+    /// <summary>
+    /// MIME type of the attachment (e.g., "image/png", "application/pdf").
+    /// </summary>
+    public string? FileType { get; set; }
+
+    /// <summary>
+    /// File size in bytes.
+    /// </summary>
+    public long FileSize { get; set; }
 }
 
 public class CreateConversationRequest

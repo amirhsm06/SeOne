@@ -310,4 +310,192 @@ public class PaymentService : IPaymentService
             EnrollmentId = enrollmentId
         };
     }
+
+    public async Task<ReceiptUploadResponse?> UploadReceiptAsync(
+        Guid studentId,
+        Guid classEnrollmentId,
+        string fileName,
+        string mimeType,
+        Stream fileStream,
+        string note)
+    {
+        var enrollment = await _context.Set<ClassEnrollment>()
+            .Include(x => x.CourseClass)
+            .FirstOrDefaultAsync(x =>
+                x.Id == classEnrollmentId &&
+                x.StudentId == studentId);
+
+        if (enrollment is null)
+        {
+            throw new ArgumentException("Class enrollment not found or unauthorized.");
+        }
+
+        var settings = await _context.Set<ManualPaymentSettings>()
+            .FirstOrDefaultAsync();
+
+        if (settings == null || !settings.IsEnabled)
+        {
+            throw new ArgumentException("Manual payments are not enabled.");
+        }
+
+        // Validate file size
+        if (fileStream.Length > settings.MaxReceiptSizeBytes)
+        {
+            throw new ArgumentException(
+                $"Receipt file exceeds maximum size of {settings.MaxReceiptSizeBytes} bytes.");
+        }
+
+        // Validate MIME type
+        var allowedTypes = settings.AllowedMimeTypes.Split(',');
+        if (!allowedTypes.Contains(mimeType))
+        {
+            throw new ArgumentException(
+                $"File type '{mimeType}' is not allowed.");
+        }
+
+        // Create payment record with receipt
+        var payment = new Payment
+        {
+            Id = Guid.NewGuid(),
+            StudentId = studentId,
+            CourseId = enrollment.CourseClass.CourseId,  // Link to class's course
+            ClassEnrollmentId = classEnrollmentId,
+            Amount = enrollment.FinalPrice,
+            Currency = "USD",
+            Status = PaymentStatus.Pending,
+            CreatedAt = DateTime.UtcNow,
+            Provider = "Manual"
+        };
+
+        // Save file and store path
+        // Note: File storage would typically use IMessagingFileStorageService or similar
+        // For now, storing the file name as a placeholder
+        var storedFileName = $"receipts/{Guid.NewGuid()}_{fileName}";
+        payment.ReceiptObjectPath = storedFileName;
+
+        _context.Set<Payment>().Add(payment);
+        await _context.SaveChangesAsync();
+
+        return new ReceiptUploadResponse
+        {
+            PaymentId = payment.Id,
+            ClassEnrollmentId = classEnrollmentId,
+            ReceiptObjectPath = storedFileName,
+            Status = "pending",
+            UploadedAt = payment.CreatedAt,
+            Message = "Receipt uploaded successfully. Awaiting admin verification."
+        };
+    }
+
+    public async Task<List<PendingReceiptDto>> GetPendingReceiptsAsync()
+    {
+        var pendingPayments = await _context.Set<Payment>()
+            .Where(x =>
+                x.Status == PaymentStatus.Pending &&
+                x.ReceiptObjectPath != null)
+            .Include(x => x.Student)
+            .Include(x => x.ClassEnrollment)
+                .ThenInclude(x => x.CourseClass)
+            .OrderBy(x => x.CreatedAt)
+            .ToListAsync();
+
+        return pendingPayments.Select(p => new PendingReceiptDto
+        {
+            PaymentId = p.Id,
+            ClassEnrollmentId = p.ClassEnrollmentId ?? Guid.Empty,
+            StudentId = p.StudentId,
+            StudentName = p.Student?.FullName ?? "Unknown",
+            StudentEmail = p.Student?.Email ?? "",
+            Amount = p.Amount,
+            ClassName = p.ClassEnrollment?.CourseClass?.Title ?? "Unknown Class",
+            ReceiptObjectPath = p.ReceiptObjectPath,
+            UploadedAt = p.CreatedAt,
+            ReceiptDownloadUrl = $"/api/payments/{p.Id}/receipt-download",
+            PreviewUrl = $"/api/payments/{p.Id}/receipt-preview"
+        }).ToList();
+    }
+
+    public async Task<VerifyReceiptResponse?> VerifyReceiptAsync(
+        Guid paymentId,
+        Guid adminId,
+        bool isApproved,
+        string? rejectionReason)
+    {
+        var payment = await _context.Set<Payment>()
+            .FirstOrDefaultAsync(x => x.Id == paymentId);
+
+        if (payment is null || payment.Status != PaymentStatus.Pending)
+        {
+            return null;
+        }
+
+        if (!isApproved && string.IsNullOrWhiteSpace(rejectionReason))
+        {
+            throw new ArgumentException("Rejection reason is required when rejecting a receipt.");
+        }
+
+        payment.VerifiedAt = DateTime.UtcNow;
+        payment.VerifiedBy = adminId;
+
+        if (isApproved)
+        {
+            payment.Status = PaymentStatus.Verified;
+            payment.PaidAt = DateTime.UtcNow;
+
+            // Update enrollment status if needed
+            if (payment.ClassEnrollmentId.HasValue)
+            {
+                var enrollment = await _context.Set<ClassEnrollment>()
+                    .FirstOrDefaultAsync(x =>
+                        x.Id == payment.ClassEnrollmentId.Value);
+                if (enrollment != null)
+                {
+                    enrollment.Status = "confirmed";
+                }
+            }
+        }
+        else
+        {
+            payment.Status = PaymentStatus.Rejected;
+            payment.RejectionReason = rejectionReason;
+        }
+
+        await _context.SaveChangesAsync();
+
+        return new VerifyReceiptResponse
+        {
+            PaymentId = payment.Id,
+            Status = payment.Status.ToString().ToLowerInvariant(),
+            VerifiedAt = payment.VerifiedAt ?? DateTime.UtcNow,
+            Message = isApproved ? "Receipt approved. Payment confirmed." : "Receipt rejected."
+        };
+    }
+
+    public async Task<ManualPaymentSettingsDto> GetManualPaymentSettingsAsync()
+    {
+        var settings = await _context.Set<ManualPaymentSettings>()
+            .FirstOrDefaultAsync();
+
+        if (settings is null)
+        {
+            // Return default settings
+            settings = new ManualPaymentSettings
+            {
+                IsEnabled = true,
+                MaxReceiptSizeBytes = 5242880,  // 5MB
+                AllowedMimeTypes = "image/png,image/jpeg,image/gif,application/pdf",
+                WhatsAppContactNumber = "+1234567890",
+                UpdatedAt = DateTime.UtcNow
+            };
+        }
+
+        return new ManualPaymentSettingsDto
+        {
+            IsEnabled = settings.IsEnabled,
+            MaxReceiptSizeBytes = settings.MaxReceiptSizeBytes,
+            AllowedMimeTypes = settings.AllowedMimeTypes,
+            WhatsAppContactNumber = settings.WhatsAppContactNumber,
+            WhatsAppLink = $"https://wa.me/{settings.WhatsAppContactNumber.Replace("+", "").Replace("-", "").Replace(" ", "")}"
+        };
+    }
 }

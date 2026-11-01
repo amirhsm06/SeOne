@@ -45,7 +45,8 @@ public sealed class SupabaseMessagingFileStorageService
 
     private readonly HttpClient _httpClient;
     private readonly string? _supabaseUrl;
-    private readonly string? _serviceKey;
+    private readonly string? _apiKey;
+    private readonly string? _authorizationBearer;
     private readonly string? _bucket;
     private readonly string? _assignmentBucket;
     private readonly string _imageBucket;
@@ -63,10 +64,31 @@ public sealed class SupabaseMessagingFileStorageService
         _supabaseUrl =
             configuration["SUPABASE_URL"]?.TrimEnd('/');
 
-        _serviceKey =
-            configuration["SUPABASE_SECRET_KEY"]
-            ?? configuration["SUPABASE_SERVICE_ROLE_KEY"];
+        var newSecretKey =
+            configuration["SUPABASE_SECRET_KEY"]?.Trim();
 
+        var legacyServiceRoleKey =
+            configuration["SUPABASE_SERVICE_ROLE_KEY"]?.Trim();
+
+        if (!string.IsNullOrWhiteSpace(newSecretKey) &&
+            newSecretKey.StartsWith("sb_secret_", StringComparison.Ordinal))
+        {
+            // New Supabase secret keys are API keys, not JWTs.
+            // Send them through apikey only.
+            _apiKey = newSecretKey;
+            _authorizationBearer = null;
+        }
+        else
+        {
+            // Legacy service_role JWT: send both headers.
+            var legacyKey =
+                !string.IsNullOrWhiteSpace(legacyServiceRoleKey)
+                    ? legacyServiceRoleKey
+                    : newSecretKey;
+
+            _apiKey = legacyKey;
+            _authorizationBearer = legacyKey;
+        }
         // Deliberately do not fall back to another bucket.
         _bucket =
             configuration["SUPABASE_MESSAGING_STORAGE_BUCKET"]?.Trim();
@@ -84,12 +106,16 @@ public sealed class SupabaseMessagingFileStorageService
         get
         {
             if (string.IsNullOrWhiteSpace(_supabaseUrl) ||
-                string.IsNullOrWhiteSpace(_serviceKey) ||
+                string.IsNullOrWhiteSpace(_apiKey) ||
                 string.IsNullOrWhiteSpace(_bucket) ||
                 _bucket.Contains('/') ||
-                string.Equals(_bucket, _assignmentBucket,
+                string.Equals(
+                    _bucket,
+                    _assignmentBucket,
                     StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(_bucket, _imageBucket,
+                string.Equals(
+                    _bucket,
+                    _imageBucket,
                     StringComparison.OrdinalIgnoreCase))
             {
                 return false;
@@ -99,8 +125,10 @@ public sealed class SupabaseMessagingFileStorageService
                        _supabaseUrl,
                        UriKind.Absolute,
                        out var uri)
-                   && (uri.Scheme == Uri.UriSchemeHttps ||
-                       uri.Scheme == Uri.UriSchemeHttp)
+                   && (
+                       uri.Scheme == Uri.UriSchemeHttps ||
+                       (uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback)
+                   )
                    && string.IsNullOrEmpty(uri.UserInfo)
                    && string.IsNullOrEmpty(uri.Query)
                    && string.IsNullOrEmpty(uri.Fragment);
@@ -120,34 +148,51 @@ public sealed class SupabaseMessagingFileStorageService
         using var ownedContent = content;
 
         if (!IsConfigured ||
-            !TryValidateObjectPath(objectPath, out var normalizedPath, out var extension) ||
-            !string.Equals(objectPath, normalizedPath, StringComparison.Ordinal) ||
+            !TryValidateObjectPath(
+                objectPath,
+                out var normalizedPath,
+                out var extension) ||
+            !string.Equals(
+                objectPath,
+                normalizedPath,
+                StringComparison.Ordinal) ||
             contentLength <= 0 ||
             contentLength > MaxFileSizeBytes ||
-            !AllowedMimeTypes.TryGetValue(extension, out var expectedMimeType) ||
-            !IsCompatibleContentType(extension, contentType, expectedMimeType))
+            !AllowedMimeTypes.TryGetValue(
+                extension,
+                out var expectedMimeType) ||
+            !IsCompatibleContentType(
+                extension,
+                contentType,
+                expectedMimeType))
         {
             return false;
         }
 
         try
         {
-            var policy = await GetPrivateBucketPolicyAsync(cancellationToken);
+            var policy =
+                await GetPrivateBucketPolicyAsync(cancellationToken);
 
             if (policy is null ||
                 contentLength > policy.MaximumFileSizeBytes ||
-                !IsAllowedByBucketPolicy(expectedMimeType, policy.AllowedMimeTypes))
+                !IsAllowedByBucketPolicy(
+                    expectedMimeType,
+                    policy.AllowedMimeTypes))
             {
                 return false;
             }
 
             var url = BuildObjectUrl(normalizedPath);
 
-            using var request = CreateAuthorizedRequest(HttpMethod.Post, url);
+            using var request =
+                CreateAuthorizedRequest(HttpMethod.Post, url);
 
             var streamContent = new StreamContent(ownedContent);
+
             streamContent.Headers.ContentType =
                 new MediaTypeHeaderValue(expectedMimeType);
+
             streamContent.Headers.ContentLength = contentLength;
 
             request.Content = streamContent;
@@ -168,11 +213,13 @@ public sealed class SupabaseMessagingFileStorageService
         {
             return false;
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
+            when (!cancellationToken.IsCancellationRequested)
         {
             return false;
         }
     }
+
 
     public async Task<string?> CreateSignedDownloadUrlAsync(
         string objectPath,
@@ -181,25 +228,55 @@ public sealed class SupabaseMessagingFileStorageService
     {
         if (!IsConfigured ||
             expiresInSeconds is < 1 or > MaxSignedUrlLifetimeSeconds ||
-            !TryValidateObjectPath(objectPath, out var normalizedPath, out _) ||
-            !string.Equals(objectPath, normalizedPath, StringComparison.Ordinal))
+            !TryValidateObjectPath(
+                objectPath,
+                out var normalizedPath,
+                out var extension) ||
+            !string.Equals(
+                objectPath,
+                normalizedPath,
+                StringComparison.Ordinal))
         {
+            Console.Error.WriteLine(
+                "Messaging signing diagnostic: initial configuration, lifetime, or object-path validation failed.");
+
             return null;
         }
 
         try
         {
-            var policy = await GetPrivateBucketPolicyAsync(cancellationToken);
+            var policy =
+                await GetPrivateBucketPolicyAsync(cancellationToken);
 
             if (policy is null)
+            {
+                Console.Error.WriteLine(
+                    "Messaging signing diagnostic: private bucket policy retrieval failed.");
+
                 return null;
+            }
+
+            if (!AllowedMimeTypes.TryGetValue(
+                    extension,
+                    out var expectedMimeType) ||
+                !IsAllowedByBucketPolicy(
+                    expectedMimeType,
+                    policy.AllowedMimeTypes))
+            {
+                Console.Error.WriteLine(
+                    $"Messaging signing diagnostic: bucket policy rejects MIME type for extension {extension}.");
+
+                return null;
+            }
 
             var url =
                 $"{_supabaseUrl}/storage/v1/object/sign/" +
                 $"{Uri.EscapeDataString(_bucket!)}/" +
                 EncodePath(normalizedPath);
 
-            using var request = CreateAuthorizedRequest(HttpMethod.Post, url);
+            using var request =
+                CreateAuthorizedRequest(HttpMethod.Post, url);
+
             request.Content = JsonContent.Create(
                 new { expiresIn = expiresInSeconds });
 
@@ -207,7 +284,18 @@ public sealed class SupabaseMessagingFileStorageService
                 await _httpClient.SendAsync(request, cancellationToken);
 
             if (!response.IsSuccessStatusCode)
+            {
+                var errorBody =
+                    await response.Content.ReadAsStringAsync(cancellationToken);
+
+                if (errorBody.Length > 800)
+                    errorBody = errorBody[..800];
+
+                Console.Error.WriteLine(
+                    $"Messaging signing diagnostic: Supabase returned HTTP {(int)response.StatusCode} ({response.ReasonPhrase}). Response: {errorBody}");
+
                 return null;
+            }
 
             await using var stream =
                 await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -223,34 +311,116 @@ public sealed class SupabaseMessagingFileStorageService
                     out var signedUrlElement) ||
                 signedUrlElement.ValueKind != JsonValueKind.String)
             {
+                var properties = document.RootElement.ValueKind ==
+                                 JsonValueKind.Object
+                    ? string.Join(
+                        ",",
+                        document.RootElement.EnumerateObject()
+                            .Select(p => p.Name))
+                    : document.RootElement.ValueKind.ToString();
+
+                Console.Error.WriteLine(
+                    $"Messaging signing diagnostic: successful Supabase response did not contain a signed URL. Response shape: {properties}");
+
                 return null;
             }
 
-            return ValidateSignedUrl(
-                signedUrlElement.GetString(),
-                normalizedPath);
+            var signedUrl = signedUrlElement.GetString();
+
+            if (!HasNonEmptyTokenParameter(signedUrl) &&
+                !string.IsNullOrWhiteSpace(signedUrl))
+            {
+                var fragmentToken = GetTokenFromFragment(signedUrl);
+
+                if (!string.IsNullOrWhiteSpace(fragmentToken))
+                {
+                    signedUrl = AppendTokenParameter(
+                        signedUrl,
+                        fragmentToken);
+
+                    Console.Error.WriteLine(
+                        "Messaging signing diagnostic: moved signed URL token from fragment into query.");
+                }
+            }
+
+            if (!HasNonEmptyTokenParameter(signedUrl) &&
+                !string.IsNullOrWhiteSpace(signedUrl) &&
+                TryGetProperty(
+                    document.RootElement,
+                    "token",
+                    "signedToken",
+                    out var tokenElement) &&
+                tokenElement.ValueKind == JsonValueKind.String &&
+                !string.IsNullOrWhiteSpace(tokenElement.GetString()))
+            {
+                signedUrl = AppendTokenParameter(
+                    signedUrl,
+                    tokenElement.GetString()!);
+            }
+
+            var validatedUrl = ValidateSignedUrl(
+                signedUrl,
+                normalizedPath,
+                out var validationFailure);
+
+            if (validatedUrl is null)
+            {
+                Console.Error.WriteLine(
+                    $"Messaging signing diagnostic: Supabase returned a signed URL, but local URL validation rejected it ({validationFailure}).");
+
+                if (validationFailure == "missing token query parameter")
+                {
+                    var responseFields = document.RootElement.ValueKind ==
+                                         JsonValueKind.Object
+                        ? string.Join(",", document.RootElement.EnumerateObject()
+                            .Select(property => property.Name))
+                        : document.RootElement.ValueKind.ToString();
+
+                    Console.Error.WriteLine(
+                        $"Messaging signing diagnostic: Supabase signing response fields: {responseFields}.");
+                }
+            }
+
+            return validatedUrl;
         }
-        catch (HttpRequestException)
+        catch (HttpRequestException ex)
         {
+            Console.Error.WriteLine(
+                $"Messaging signing diagnostic: HTTP transport failure: {ex.GetType().Name}: {ex.Message}");
+
             return null;
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
+            Console.Error.WriteLine(
+                $"Messaging signing diagnostic: invalid Supabase JSON: {ex.Message}");
+
             return null;
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
+            when (!cancellationToken.IsCancellationRequested)
         {
+            Console.Error.WriteLine(
+                "Messaging signing diagnostic: Supabase signing request timed out.");
+
             return null;
         }
     }
+
 
     public async Task<bool> DeleteObjectAsync(
         string objectPath,
         CancellationToken cancellationToken = default)
     {
         if (!IsConfigured ||
-            !TryValidateObjectPath(objectPath, out var normalizedPath, out _) ||
-            !string.Equals(objectPath, normalizedPath, StringComparison.Ordinal))
+            !TryValidateObjectPath(
+                objectPath,
+                out var normalizedPath,
+                out _) ||
+            !string.Equals(
+                objectPath,
+                normalizedPath,
+                StringComparison.Ordinal))
         {
             return false;
         }
@@ -259,7 +429,8 @@ public sealed class SupabaseMessagingFileStorageService
         {
             var url = BuildObjectUrl(normalizedPath);
 
-            using var request = CreateAuthorizedRequest(HttpMethod.Delete, url);
+            using var request =
+                CreateAuthorizedRequest(HttpMethod.Delete, url);
 
             using var response =
                 await _httpClient.SendAsync(request, cancellationToken);
@@ -270,7 +441,8 @@ public sealed class SupabaseMessagingFileStorageService
         {
             return false;
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
+            when (!cancellationToken.IsCancellationRequested)
         {
             return false;
         }
@@ -299,7 +471,9 @@ public sealed class SupabaseMessagingFileStorageService
                 $"{_supabaseUrl}/storage/v1/bucket/" +
                 Uri.EscapeDataString(_bucket!);
 
-            using var request = CreateAuthorizedRequest(HttpMethod.Get, url);
+            using var request =
+                CreateAuthorizedRequest(HttpMethod.Get, url);
+
             using var response =
                 await _httpClient.SendAsync(request, cancellationToken);
 
@@ -325,7 +499,6 @@ public sealed class SupabaseMessagingFileStorageService
                 sizeElement.ValueKind != JsonValueKind.Number ||
                 !sizeElement.TryGetInt64(out var maximumFileSizeBytes) ||
                 maximumFileSizeBytes <= 0 ||
-                maximumFileSizeBytes > MaxFileSizeBytes ||
                 !TryGetProperty(
                     root,
                     "allowed_mime_types",
@@ -341,14 +514,6 @@ public sealed class SupabaseMessagingFileStorageService
                 .Where(x => x.ValueKind == JsonValueKind.String)
                 .Select(x => x.GetString()!)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-            // Require bucket policy coverage for all supported extensions.
-            foreach (var requiredType in AllowedMimeTypes.Values.Distinct(
-                         StringComparer.OrdinalIgnoreCase))
-            {
-                if (!IsAllowedByBucketPolicy(requiredType, configuredMimeTypes))
-                    return null;
-            }
 
             _cachedPolicy = new MessagingBucketPolicy(
                 maximumFileSizeBytes,
@@ -366,7 +531,8 @@ public sealed class SupabaseMessagingFileStorageService
         {
             return null;
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
+            when (!cancellationToken.IsCancellationRequested)
         {
             return null;
         }
@@ -381,9 +547,16 @@ public sealed class SupabaseMessagingFileStorageService
         string url)
     {
         var request = new HttpRequestMessage(method, url);
-        request.Headers.Authorization =
-            new AuthenticationHeaderValue("Bearer", _serviceKey);
-        request.Headers.Add("apikey", _serviceKey);
+
+        request.Headers.Add("apikey", _apiKey!);
+
+        if (!string.IsNullOrWhiteSpace(_authorizationBearer))
+        {
+            request.Headers.Authorization =
+                new AuthenticationHeaderValue(
+                    "Bearer",
+                    _authorizationBearer);
+        }
 
         return request;
     }
@@ -398,52 +571,128 @@ public sealed class SupabaseMessagingFileStorageService
 
     private string? ValidateSignedUrl(
         string? value,
-        string expectedObjectPath)
+        string expectedObjectPath,
+        out string rejectionReason)
     {
         if (string.IsNullOrWhiteSpace(value))
+        {
+            rejectionReason = "empty URL";
             return null;
+        }
 
         Uri signedUri;
 
-        if (Uri.TryCreate(value, UriKind.Absolute, out var absoluteUri))
+        try
         {
-            signedUri = absoluteUri;
-        }
-        else
-        {
-            var relative = value.TrimStart('/');
-
-            if (relative.StartsWith(
-                    "object/sign/",
-                    StringComparison.Ordinal))
-            {
-                relative = $"storage/v1/{relative}";
-            }
-
-            if (!relative.StartsWith(
+            var isSupabaseRelativeUrl =
+                value.StartsWith("/object/sign/", StringComparison.Ordinal) ||
+                value.StartsWith("object/sign/", StringComparison.Ordinal) ||
+                value.StartsWith(
+                    "/storage/v1/object/sign/",
+                    StringComparison.Ordinal) ||
+                value.StartsWith(
                     "storage/v1/object/sign/",
-                    StringComparison.Ordinal))
-            {
-                return null;
-            }
+                    StringComparison.Ordinal);
 
-            signedUri = new Uri(new Uri(_supabaseUrl!.TrimEnd('/') + "/"), relative);
+            if (!isSupabaseRelativeUrl &&
+                Uri.TryCreate(value, UriKind.Absolute, out var absoluteUri))
+            {
+                signedUri = absoluteUri;
+            }
+            else
+            {
+                var relative = value.TrimStart('/');
+
+                if (relative.StartsWith(
+                        "object/sign/",
+                        StringComparison.Ordinal))
+                {
+                    relative = $"storage/v1/{relative}";
+                }
+
+                if (!relative.StartsWith(
+                        "storage/v1/object/sign/",
+                        StringComparison.Ordinal))
+                {
+                    rejectionReason = "unsupported relative URL path";
+                    return null;
+                }
+
+                signedUri = new Uri(
+                    new Uri(_supabaseUrl!.TrimEnd('/') + "/"),
+                    relative);
+            }
+        }
+        catch (UriFormatException)
+        {
+            rejectionReason = "malformed URL";
+            return null;
         }
 
         var baseUri = new Uri(_supabaseUrl!);
 
-        if (!string.Equals(
+        if (!string.IsNullOrEmpty(signedUri.UserInfo))
+        {
+            rejectionReason = "URL contains embedded credentials";
+            return null;
+        }
+
+        var originMatches =
+            string.Equals(
                 signedUri.Scheme,
                 baseUri.Scheme,
-                StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(
+                StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(
                 signedUri.Host,
                 baseUri.Host,
-                StringComparison.OrdinalIgnoreCase) ||
-            signedUri.Port != baseUri.Port ||
-            !string.IsNullOrEmpty(signedUri.UserInfo) ||
-            !signedUri.Query.Contains("token=", StringComparison.OrdinalIgnoreCase))
+                StringComparison.OrdinalIgnoreCase) &&
+            signedUri.Port == baseUri.Port;
+
+        if (!originMatches)
         {
+            Console.Error.WriteLine(
+                "Messaging signing diagnostic: canonicalizing returned signed URL to the configured Supabase origin.");
+        }
+
+        signedUri = new Uri(
+            baseUri.GetLeftPart(UriPartial.Authority) +
+            signedUri.PathAndQuery,
+            UriKind.Absolute);
+
+        var queryParameters = signedUri.Query
+            .TrimStart('?')
+            .Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Select(parameter => parameter.Split('=', 2))
+            .Select(parts => (
+                Name: parts[0],
+                HasValue: parts.Length > 1 &&
+                          !string.IsNullOrWhiteSpace(parts[1])))
+            .ToArray();
+
+        if (!queryParameters.Any(parameter =>
+                string.Equals(
+                    parameter.Name,
+                    "token",
+                    StringComparison.OrdinalIgnoreCase) &&
+                parameter.HasValue))
+        {
+            var queryParameterNames = string.Join(
+                ",",
+                queryParameters.Select(parameter =>
+                    new string(parameter.Name
+                        .Where(character =>
+                            char.IsLetterOrDigit(character) ||
+                            character is '_' or '-')
+                        .Take(32)
+                        .ToArray())));
+
+            if (string.IsNullOrEmpty(queryParameterNames))
+                queryParameterNames = "none";
+
+            Console.Error.WriteLine(
+                $"Messaging signing diagnostic: returned signed URL query parameter names: {queryParameterNames}.");
+
+            rejectionReason = "missing token query parameter";
             return null;
         }
 
@@ -451,38 +700,79 @@ public sealed class SupabaseMessagingFileStorageService
             '/',
             StringSplitOptions.RemoveEmptyEntries);
 
-        if (segments.Length < 6 ||
-            segments[0] != "storage" ||
-            segments[1] != "v1" ||
-            segments[2] != "object" ||
-            segments[3] != "sign" ||
-            !string.Equals(
-                Uri.UnescapeDataString(segments[4]),
-                _bucket,
-                StringComparison.Ordinal))
-        {
-            return null;
-        }
+        var basePathSegments = baseUri.AbsolutePath.Split(
+            '/',
+            StringSplitOptions.RemoveEmptyEntries);
+        var pathOffset = 0;
 
         try
         {
+            var hasConfiguredBasePath =
+                basePathSegments.Length > 0 &&
+                segments.Length > basePathSegments.Length &&
+                basePathSegments
+                    .Select(Uri.UnescapeDataString)
+                    .SequenceEqual(
+                        segments
+                            .Take(basePathSegments.Length)
+                            .Select(Uri.UnescapeDataString),
+                        StringComparer.Ordinal);
+
+            if (hasConfiguredBasePath)
+            {
+                pathOffset = basePathSegments.Length;
+            }
+            else if (segments.Length < 4 ||
+                     segments[0] != "storage" ||
+                     segments[1] != "v1" ||
+                     segments[2] != "object" ||
+                     segments[3] != "sign")
+            {
+                rejectionReason = "storage route did not match the configured base path";
+                return null;
+            }
+
+            if (segments.Length < pathOffset + 6 ||
+                segments[pathOffset] != "storage" ||
+                segments[pathOffset + 1] != "v1" ||
+                segments[pathOffset + 2] != "object" ||
+                segments[pathOffset + 3] != "sign")
+            {
+                rejectionReason = "invalid signed-object route";
+                return null;
+            }
+
+            if (!string.Equals(
+                    Uri.UnescapeDataString(segments[pathOffset + 4]),
+                    _bucket,
+                    StringComparison.Ordinal))
+            {
+                rejectionReason = "bucket did not match";
+                return null;
+            }
+
             var returnedPath = string.Join(
                 '/',
-                segments.Skip(5).Select(Uri.UnescapeDataString));
+                segments
+                    .Skip(pathOffset + 5)
+                    .Select(Uri.UnescapeDataString));
 
             if (!string.Equals(
                     returnedPath,
                     expectedObjectPath,
                     StringComparison.Ordinal))
             {
+                rejectionReason = "object path did not match";
                 return null;
             }
         }
         catch (UriFormatException)
         {
+            rejectionReason = "malformed URL path encoding";
             return null;
         }
 
+        rejectionReason = string.Empty;
         return signedUri.AbsoluteUri;
     }
 
@@ -505,7 +795,9 @@ public sealed class SupabaseMessagingFileStorageService
             return false;
         }
 
-        var segments = objectPath.Split('/', StringSplitOptions.None);
+        var segments = objectPath.Split(
+            '/',
+            StringSplitOptions.None);
 
         if (segments.Length != 4 ||
             segments[0] != "private-messaging" ||
@@ -534,24 +826,46 @@ public sealed class SupabaseMessagingFileStorageService
             return false;
 
         var fileId = fileName[..^extension.Length];
-
-        if (!Guid.TryParseExact(fileId, "N", out var parsedFileId) ||
+        if (fileId.Length < 32 ||
+            !Guid.TryParseExact(fileId[..32], "N", out var parsedFileId) ||
             !string.Equals(
-                fileId,
+                fileId[..32],
                 parsedFileId.ToString("N"),
                 StringComparison.Ordinal))
         {
             return false;
         }
 
+        var displayName = fileId[32..];
+        if (displayName.Length > 0 &&
+            (displayName.Length < 3 ||
+             !displayName.StartsWith("__", StringComparison.Ordinal) ||
+             !IsSafeAttachmentDisplayName(displayName[2..])))
+        {
+            return false;
+        }
+
         normalizedPath =
             $"private-messaging/{conversationId:D}/{messageId:D}/" +
-            $"{parsedFileId:N}{extension}";
+            $"{fileId}{extension}";
 
         return string.Equals(
             objectPath,
             normalizedPath,
             StringComparison.Ordinal);
+    }
+
+    private static bool IsSafeAttachmentDisplayName(string displayName)
+    {
+        return displayName.Length <= 100 &&
+               !string.IsNullOrWhiteSpace(displayName) &&
+               string.Equals(
+                   displayName,
+                   displayName.Trim(' ', '.'),
+                   StringComparison.Ordinal) &&
+               displayName.All(character =>
+                   char.IsLetterOrDigit(character) ||
+                   character is ' ' or '-' or '_' or '.' or '(' or ')');
     }
 
     private static bool IsCompatibleContentType(
@@ -562,8 +876,12 @@ public sealed class SupabaseMessagingFileStorageService
         if (string.IsNullOrWhiteSpace(contentType))
             return true;
 
-        if (!MediaTypeHeaderValue.TryParse(contentType, out var parsed))
+        if (!MediaTypeHeaderValue.TryParse(
+                contentType,
+                out var parsed))
+        {
             return false;
+        }
 
         var supplied = parsed.MediaType;
 
@@ -571,7 +889,9 @@ public sealed class SupabaseMessagingFileStorageService
             supplied.Equals(
                 "application/octet-stream",
                 StringComparison.OrdinalIgnoreCase) ||
-            supplied.Equals(expectedMimeType, StringComparison.OrdinalIgnoreCase))
+            supplied.Equals(
+                expectedMimeType,
+                StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
@@ -579,16 +899,24 @@ public sealed class SupabaseMessagingFileStorageService
         return extension.ToLowerInvariant() switch
         {
             ".jpg" or ".jpeg" =>
-                supplied.Equals("image/jpg", StringComparison.OrdinalIgnoreCase),
+                supplied.Equals(
+                    "image/jpg",
+                    StringComparison.OrdinalIgnoreCase),
 
             ".m4a" =>
-                supplied.Equals("audio/x-m4a", StringComparison.OrdinalIgnoreCase),
+                supplied.Equals(
+                    "audio/x-m4a",
+                    StringComparison.OrdinalIgnoreCase),
 
             ".wav" =>
-                supplied.Equals("audio/x-wav", StringComparison.OrdinalIgnoreCase),
+                supplied.Equals(
+                    "audio/x-wav",
+                    StringComparison.OrdinalIgnoreCase),
 
             ".zip" =>
-                supplied.Equals("application/x-zip-compressed", StringComparison.OrdinalIgnoreCase),
+                supplied.Equals(
+                    "application/x-zip-compressed",
+                    StringComparison.OrdinalIgnoreCase),
 
             _ => false
         };
@@ -620,6 +948,96 @@ public sealed class SupabaseMessagingFileStorageService
     {
         return element.TryGetProperty(firstName, out value) ||
                element.TryGetProperty(secondName, out value);
+    }
+
+    private static bool HasNonEmptyTokenParameter(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        var queryStart = value.IndexOf('?');
+
+        if (queryStart < 0)
+            return false;
+
+        var fragmentStart = value.IndexOf('#', queryStart);
+        var queryEnd = fragmentStart >= 0 ? fragmentStart : value.Length;
+        var query = value[(queryStart + 1)..queryEnd];
+
+        return query
+            .Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Any(parameter =>
+            {
+                var separator = parameter.IndexOf('=');
+
+                return separator > 0 &&
+                       string.Equals(
+                           parameter[..separator],
+                           "token",
+                           StringComparison.OrdinalIgnoreCase) &&
+                       !string.IsNullOrWhiteSpace(
+                           parameter[(separator + 1)..]);
+            });
+    }
+
+    private static string? GetTokenFromFragment(string value)
+    {
+        var fragmentStart = value.IndexOf('#');
+
+        if (fragmentStart < 0)
+            return null;
+
+        var fragment = value[(fragmentStart + 1)..];
+
+        foreach (var parameter in fragment.Split(
+                     '&',
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            var separator = parameter.IndexOf('=');
+
+            if (separator <= 0 ||
+                !string.Equals(
+                    parameter[..separator],
+                    "token",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var encodedToken = parameter[(separator + 1)..];
+
+            if (string.IsNullOrWhiteSpace(encodedToken))
+                return null;
+
+            try
+            {
+                return Uri.UnescapeDataString(encodedToken);
+            }
+            catch (UriFormatException)
+            {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    private static string AppendTokenParameter(
+        string value,
+        string token)
+    {
+        var fragmentIndex = value.IndexOf('#');
+        var queryIndex = value.IndexOf('?');
+        var hasQuery = queryIndex >= 0 &&
+                       (fragmentIndex < 0 || queryIndex < fragmentIndex);
+        var insertionIndex = fragmentIndex >= 0
+            ? fragmentIndex
+            : value.Length;
+        var separator = hasQuery ? "&" : "?";
+
+        return value.Insert(
+            insertionIndex,
+            $"{separator}token={Uri.EscapeDataString(token)}");
     }
 
     private static string EncodePath(string path)

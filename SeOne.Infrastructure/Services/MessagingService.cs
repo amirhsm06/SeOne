@@ -870,6 +870,13 @@ public class MessagingService : IMessagingService
                 string.IsNullOrEmpty(uri.UserInfo))
             {
                 dto.Attachments.Add(attachment);
+                dto.AttachmentDetails.Add(new MessageAttachmentDto
+                {
+                    DisplayName = GetAttachmentDisplayName(uri.AbsolutePath),
+                    DownloadUrl = attachment,
+                    FileType = GetMimeTypeFromFileName(uri.AbsolutePath),
+                    FileSize = 0  // Size not available for external URLs
+                });
             }
 
             continue;
@@ -895,6 +902,13 @@ public class MessagingService : IMessagingService
             if (!string.IsNullOrWhiteSpace(signedUrl))
             {
                 dto.Attachments.Add(signedUrl);
+                dto.AttachmentDetails.Add(new MessageAttachmentDto
+                {
+                    DisplayName = GetAttachmentDisplayName(attachment),
+                    DownloadUrl = signedUrl,
+                    FileType = GetMimeTypeFromFileName(attachment),
+                    FileSize = 0  // Size would require additional metadata or file system query
+                });
             }
             else
             {
@@ -947,12 +961,75 @@ public class MessagingService : IMessagingService
             return false;
 
         var fileId = fileName[..^extension.Length];
+        if (fileId.Length < 32 ||
+            !Guid.TryParseExact(fileId[..32], "N", out var parsedId) ||
+            !string.Equals(
+                fileId[..32],
+                parsedId.ToString("N"),
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
 
-        return Guid.TryParseExact(fileId, "N", out var parsedId) &&
+        var displayName = fileId[32..];
+        return displayName.Length == 0 ||
+               (displayName.Length >= 3 &&
+                displayName.StartsWith("__", StringComparison.Ordinal) &&
+                IsSafeAttachmentDisplayName(displayName[2..]));
+    }
+
+    private static bool IsSafeAttachmentDisplayName(string displayName)
+    {
+        return displayName.Length <= 100 &&
+               !string.IsNullOrWhiteSpace(displayName) &&
                string.Equals(
-                   fileId,
-                   parsedId.ToString("N"),
-                   StringComparison.Ordinal);
+                   displayName,
+                   displayName.Trim(' ', '.'),
+                   StringComparison.Ordinal) &&
+               displayName.All(character =>
+                   char.IsLetterOrDigit(character) ||
+                   character is ' ' or '-' or '_' or '.' or '(' or ')');
+    }
+
+    private static string GetAttachmentDisplayName(string path)
+    {
+        var fileName = path.Split('/').LastOrDefault() ?? string.Empty;
+
+        try
+        {
+            fileName = Uri.UnescapeDataString(fileName);
+        }
+        catch (UriFormatException)
+        {
+            return "Attachment";
+        }
+
+        var extension = Path.GetExtension(fileName);
+        var nameWithoutExtension = extension.Length > 0
+            ? fileName[..^extension.Length]
+            : fileName;
+
+        if (nameWithoutExtension.Length > 34 &&
+            Guid.TryParseExact(
+                nameWithoutExtension[..32],
+                "N",
+                out _) &&
+            nameWithoutExtension[32..34] == "__")
+        {
+            return nameWithoutExtension[34..] + extension;
+        }
+
+        return extension.ToLowerInvariant() switch
+        {
+            ".png" or ".jpg" or ".jpeg" or ".webp" or ".gif" =>
+                "Image attachment",
+            ".mp3" or ".m4a" or ".wav" => "Audio attachment",
+            ".mp4" => "Video attachment",
+            ".pdf" => "PDF attachment",
+            ".doc" or ".docx" or ".xls" or ".xlsx" or ".ppt" or ".pptx" =>
+                "Document attachment",
+            _ => "File attachment"
+        };
     }
 
     private static bool
@@ -1033,5 +1110,30 @@ public class MessagingService : IMessagingService
         return attachments.All(x =>
             !string.IsNullOrWhiteSpace(x) &&
             x.Length <= 1000);
+    }
+
+    private static string? GetMimeTypeFromFileName(string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+            return null;
+
+        var extension = Path.GetExtension(fileName).ToLowerInvariant();
+        return extension switch
+        {
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            ".gif" => "image/gif",
+            ".webp" => "image/webp",
+            ".pdf" => "application/pdf",
+            ".doc" => "application/msword",
+            ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".txt" => "text/plain",
+            ".csv" => "text/csv",
+            ".mp4" => "video/mp4",
+            ".mp3" => "audio/mpeg",
+            ".wav" => "audio/wav",
+            ".zip" => "application/zip",
+            _ => "application/octet-stream"
+        };
     }
 }

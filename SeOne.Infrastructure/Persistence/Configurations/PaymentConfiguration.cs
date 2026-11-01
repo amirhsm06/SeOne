@@ -18,6 +18,8 @@ public class PaymentConfiguration : IEntityTypeConfiguration<Payment>
         builder.Property(x => x.CourseId)
             .IsRequired();
 
+        builder.Property(x => x.ClassEnrollmentId);
+
         builder.Property(x => x.Amount)
             .HasPrecision(18, 2)
             .IsRequired();
@@ -43,6 +45,16 @@ public class PaymentConfiguration : IEntityTypeConfiguration<Payment>
         builder.Property(x => x.FailureReason)
             .HasMaxLength(1000);
 
+        builder.Property(x => x.ReceiptObjectPath)
+            .HasMaxLength(512);
+
+        builder.Property(x => x.RejectionReason)
+            .HasMaxLength(1000);
+
+        builder.Property(x => x.VerifiedAt);
+
+        builder.Property(x => x.VerifiedBy);
+
         builder.Property(x => x.CreatedAt)
             .IsRequired();
 
@@ -56,6 +68,8 @@ public class PaymentConfiguration : IEntityTypeConfiguration<Payment>
 
         builder.HasIndex(x => x.CourseId);
 
+        builder.HasIndex(x => x.ClassEnrollmentId);
+
         builder.HasIndex(x => x.ProviderPaymentId)
             .IsUnique();
 
@@ -67,6 +81,11 @@ public class PaymentConfiguration : IEntityTypeConfiguration<Payment>
         builder.HasOne(x => x.Student)
             .WithMany()
             .HasForeignKey(x => x.StudentId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasOne(x => x.ClassEnrollment)
+            .WithMany(x => x.Payments)
+            .HasForeignKey(x => x.ClassEnrollmentId)
             .OnDelete(DeleteBehavior.Restrict);
     }
 }

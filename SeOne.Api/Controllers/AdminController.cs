@@ -97,32 +97,83 @@ public class AdminController : ApiControllerBase
         return result;
     }
     [HttpPatch("teachers/{id:guid}")]
-    public async Task<IActionResult> UpdateTeacher(Guid id,[FromBody] JsonElement body)
+    public async Task<IActionResult> UpdateTeacher(
+        Guid id,
+        [FromBody] JsonElement body)
     {
-        var u = await _users.FindByIdAsync(id.ToString());
-        if (u is null || u.Role != UserRole.Teacher) return NotFound();
-        ApplyNameUpdate(u, body);
-        SetIfString(body, "avatarUrl", v => u.AvatarUrl = v);
-        SetIfString(body, "bio", v => u.Bio = v);
-        var profile = await _db.Set<TeacherProfile>().FirstOrDefaultAsync(p => p.TeacherId == id);
-        if (profile is null) { profile = new TeacherProfile { Id = Guid.NewGuid(), TeacherId = id }; _db.Add(profile); }
+        var user = await _users.FindByIdAsync(id.ToString());
+
+        if (user is null || user.Role != UserRole.Teacher)
+            return NotFound();
+
+        ApplyNameUpdate(user, body);
+
+        var profile = await _db.Set<TeacherProfile>()
+            .FirstOrDefaultAsync(p => p.TeacherId == id);
+
+        if (profile is null)
+        {
+            profile = new TeacherProfile
+            {
+                Id = Guid.NewGuid(),
+                TeacherId = id,
+                Rating = 0m
+            };
+
+            _db.Add(profile);
+        }
+
+        // Keep teacher profile fields in the same canonical location
+        // used by TeachersController and TeacherService.
+        SetIfString(body, "avatarUrl", v => profile.Avatar = v);
+        SetIfString(body, "bio", v => profile.Bio = v);
+        SetIfString(body, "videoUrl", v =>
+            profile.VideoUrl = string.IsNullOrWhiteSpace(v) ? null : v.Trim());
+
         SetIfString(body, "subject", v => profile.Subject = v);
         SetIfString(body, "level", v => profile.Level = v);
         SetIfString(body, "teachingLanguage", v => profile.TeachingLanguage = v);
-        if (body.TryGetProperty("email", out var ep) && ep.ValueKind == System.Text.Json.JsonValueKind.String)
+
+        if (body.TryGetProperty("email", out var emailElement) &&
+            emailElement.ValueKind == JsonValueKind.String)
         {
-            var email = ep.GetString();
-            if (!string.IsNullOrWhiteSpace(email) && !string.Equals(u.Email, email, StringComparison.OrdinalIgnoreCase))
+            var email = emailElement.GetString();
+
+            if (!string.IsNullOrWhiteSpace(email) &&
+                !string.Equals(user.Email, email, StringComparison.OrdinalIgnoreCase))
             {
-                var token = await _users.GenerateChangeEmailTokenAsync(u, email);
-                var emailResult = await _users.ChangeEmailAsync(u, email, token);
-                if (!emailResult.Succeeded) return BadRequest(new { message = string.Join(" ", emailResult.Errors.Select(e => e.Description)) });
+                var token = await _users.GenerateChangeEmailTokenAsync(user, email);
+                var emailResult = await _users.ChangeEmailAsync(user, email, token);
+
+                if (!emailResult.Succeeded)
+                {
+                    return BadRequest(new
+                    {
+                        message = string.Join(
+                            " ",
+                            emailResult.Errors.Select(e => e.Description))
+                    });
+                }
             }
         }
-        u.UpdatedAt = DateTime.UtcNow;
-        await _users.UpdateAsync(u);
+
+        user.UpdatedAt = DateTime.UtcNow;
+
+        var updateResult = await _users.UpdateAsync(user);
+
+        if (!updateResult.Succeeded)
+        {
+            return BadRequest(new
+            {
+                message = string.Join(
+                    " ",
+                    updateResult.Errors.Select(e => e.Description))
+            });
+        }
+
         await _db.SaveChangesAsync();
-        return Ok(MapTeacher(u, profile));
+
+        return Ok(MapTeacher(user, profile));
     }
     [HttpPatch("teachers/{id:guid}/status")]
     public Task<IActionResult> TeacherStatus(Guid id,[FromBody] StatusRequest r)=>SetStatus(id,UserRole.Teacher,new[]{"pending","active","suspended"},r.Status);
@@ -529,7 +580,21 @@ public class AdminController : ApiControllerBase
         user.FullName = $"{user.FirstName} {user.FamilyName}".Trim();
     }
     private static object MapStudent(User u,int courses)=>new{id=u.Id,fullName=u.FullName,email=u.Email,avatarUrl=u.AvatarUrl??string.Empty,joinedAt=u.CreatedAt,status=u.AccountStatus,coursesEnrolled=courses};
-    private static object MapTeacher(User u,TeacherProfile? p)=>new{id=u.Id,userId=u.Id,fullName=u.FullName,email=u.Email,avatarUrl=p?.Avatar??u.AvatarUrl??string.Empty,teachingLanguage=p?.TeachingLanguage??"english",subject=p?.Subject??string.Empty,level=p?.Level??string.Empty,rating=p?.Rating??0,bio=p?.Bio??u.Bio??string.Empty,status=u.AccountStatus};
+    private static object MapTeacher(User u, TeacherProfile? p) => new
+    {
+        id = u.Id,
+        userId = u.Id,
+        fullName = u.FullName,
+        email = u.Email,
+        avatarUrl = p?.Avatar ?? u.AvatarUrl ?? string.Empty,
+        videoUrl = p?.VideoUrl,
+        teachingLanguage = p?.TeachingLanguage ?? "english",
+        subject = p?.Subject ?? string.Empty,
+        level = p?.Level ?? string.Empty,
+        rating = p?.Rating ?? 0m,
+        bio = p?.Bio ?? u.Bio ?? string.Empty,
+        status = u.AccountStatus
+    };
     private static object MapBlog(BlogPost b)=>new{id=b.Id,title=b.Title,excerpt=b.Excerpt,content=b.Content,author=b.Author,category=b.Category,status=b.IsPublished?"published":"draft",publishedAt=b.IsPublished?b.CreatedAt:(DateTime?)null,readTimeMinutes=ParseReadTime(b.ReadTime),imageUrl=b.ImageUrl??string.Empty,views=0,lang=b.Language};
     private static int ParseReadTime(string s){var digits=new string(s.Where(char.IsDigit).ToArray());return int.TryParse(digits,out var n)?n:5;}
     private static string? GetString(System.Text.Json.JsonElement b,string name)=>b.TryGetProperty(name,out var p)&&p.ValueKind==System.Text.Json.JsonValueKind.String?p.GetString():null;
