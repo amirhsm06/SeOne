@@ -150,6 +150,7 @@ builder.Services.AddHttpClient<IMessagingFileStorageService, SupabaseMessagingFi
 builder.Services.AddHttpClient<ITeacherVideoStorageService,SupabaseTeacherVideoStorageService>();
 builder.Services.AddHttpClient<ISupportFileStorageService, SupabaseSupportFileStorageService>();
 builder.Services.AddHttpClient<IClassroomFileStorageService, SupabaseClassroomFileStorageService>();
+builder.Services.AddScoped<IClassGroupProvisioningService, ClassGroupProvisioningService>();
 
 var app = builder.Build();
 

@@ -82,6 +82,10 @@ public class SeOneDbContext
     public DbSet<Lesson> Lessons { get; set; }
 
     public DbSet<LessonProgress> LessonProgress { get; set; }
+    public DbSet<TeacherGroupChatMessage> TeacherGroupChatMessages => Set<TeacherGroupChatMessage>();
+    public DbSet<ClassGroup> ClassGroups => Set<ClassGroup>();
+    public DbSet<ClassGroupMember> ClassGroupMembers => Set<ClassGroupMember>();
+    public DbSet<ClassGroupMessage> ClassGroupMessages => Set<ClassGroupMessage>();
     protected override void OnModelCreating(
         ModelBuilder modelBuilder)
     {

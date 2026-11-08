@@ -66,10 +66,76 @@ public class AdminController : ApiControllerBase
     [HttpGet("students/{id:guid}/progress")]
     public Task<IActionResult> StudentProgress(Guid id)=>GetStudentProgress(id);
     [HttpPost("students/{id:guid}/enrollments")]
-    public Task<IActionResult> AdminEnrollStudent(Guid id,[FromBody] AdminEnrollRequest r)=>EnrollStudent(id,r.CourseId);
-    [HttpDelete("students/{studentId:guid}/enrollments/{enrollmentId:guid}")]
-    public async Task<IActionResult> CancelStudentEnrollment(Guid studentId,Guid enrollmentId){var e=await _db.Set<Enrollment>().FirstOrDefaultAsync(e=>e.Id==enrollmentId&&e.StudentId==studentId);if(e is null)return NotFound();await _db.Set<LearningSession>().Where(s=>s.EnrollmentId==e.Id).ExecuteDeleteAsync();_db.Remove(e);await _db.SaveChangesAsync();return NoContent();}
+    public async Task<IActionResult> AdminEnrollStudent(
+    Guid id,
+    [FromBody] AdminEnrollRequest r)
+    {
+        var studentExists = await _db.Users.AnyAsync(u =>
+            u.Id == id &&
+            u.Role == UserRole.Student &&
+            u.AccountStatus == "active");
 
+        if (!studentExists)
+            return NotFound(new { message = "Active student not found." });
+
+        var courseExists = await _db.Set<Course>()
+            .AnyAsync(c => c.Id == r.CourseId);
+
+        if (!courseExists)
+            return NotFound(new { message = "Course not found." });
+
+        var alreadyEnrolled = await _db.Set<Enrollment>()
+            .AnyAsync(e =>
+                e.StudentId == id &&
+                e.CourseId == r.CourseId);
+
+        if (alreadyEnrolled)
+        {
+            return Conflict(new ProblemDetails
+            {
+                Title = "The student is already enrolled in this course.",
+                Status = StatusCodes.Status409Conflict
+            });
+        }
+
+        return await EnrollStudent(id, r.CourseId);
+    }
+    [HttpDelete("students/{studentId:guid}/enrollments/{enrollmentId:guid}")]
+    public async Task<IActionResult> CancelStudentEnrollment(
+     Guid studentId,
+     Guid enrollmentId,
+     [FromQuery] Guid courseId)
+    {
+        if (courseId == Guid.Empty)
+            return BadRequest(new ProblemDetails
+            {
+                Title = "courseId query parameter is required.",
+                Status = StatusCodes.Status400BadRequest
+            });
+
+        await using var transaction =
+            await _db.Database.BeginTransactionAsync();
+
+        var enrollment = await _db.Set<Enrollment>()
+            .FirstOrDefaultAsync(e =>
+                e.Id == enrollmentId &&
+                e.StudentId == studentId &&
+                e.CourseId == courseId);
+
+        if (enrollment is null)
+            return NotFound();
+
+        await _db.Set<LearningSession>()
+            .Where(s => s.EnrollmentId == enrollment.Id)
+            .ExecuteDeleteAsync();
+
+        _db.Remove(enrollment);
+
+        await _db.SaveChangesAsync();
+        await transaction.CommitAsync();
+
+        return NoContent();
+    }
     [HttpGet("teachers")]
     public async Task<IActionResult> Teachers([FromQuery]int page=1,[FromQuery]int pageSize=20,[FromQuery]string? search=null,[FromQuery]string? status=null)
     {

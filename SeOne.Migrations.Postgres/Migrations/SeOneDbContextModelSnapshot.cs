@@ -518,6 +518,101 @@ namespace SeOne.Migrations.Postgres.Migrations
                     b.ToTable("ClassEnrollments", (string)null);
                 });
 
+            modelBuilder.Entity("SeOne.Domain.Entities.ClassGroup", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ClassId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("GroupType")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(180)
+                        .HasColumnType("character varying(180)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ClassId")
+                        .IsUnique();
+
+                    b.HasIndex("IsActive");
+
+                    b.ToTable("ClassGroups", (string)null);
+                });
+
+            modelBuilder.Entity("SeOne.Domain.Entities.ClassGroupMember", b =>
+                {
+                    b.Property<Guid>("GroupId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime>("JoinedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
+
+                    b.HasKey("GroupId", "UserId");
+
+                    b.HasIndex("UserId", "IsActive");
+
+                    b.ToTable("ClassGroupMembers", (string)null);
+                });
+
+            modelBuilder.Entity("SeOne.Domain.Entities.ClassGroupMessage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasMaxLength(5000)
+                        .HasColumnType("character varying(5000)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("GroupId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("SenderId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("SenderRole")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SenderId");
+
+                    b.HasIndex("GroupId", "CreatedAt", "Id");
+
+                    b.ToTable("ClassGroupMessages", (string)null);
+                });
+
             modelBuilder.Entity("SeOne.Domain.Entities.ClassInvite", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1923,6 +2018,40 @@ namespace SeOne.Migrations.Postgres.Migrations
                     b.ToTable("TeacherAvailabilities", (string)null);
                 });
 
+            modelBuilder.Entity("SeOne.Domain.Entities.TeacherGroupChatMessage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasMaxLength(5000)
+                        .HasColumnType("character varying(5000)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsAnnouncement")
+                        .HasColumnType("boolean");
+
+                    b.Property<Guid>("SenderId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("SenderRole")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SenderId");
+
+                    b.HasIndex("CreatedAt", "Id");
+
+                    b.ToTable("TeacherGroupChatMessages", (string)null);
+                });
+
             modelBuilder.Entity("SeOne.Domain.Entities.TeacherProfile", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2355,6 +2484,33 @@ namespace SeOne.Migrations.Postgres.Migrations
                     b.Navigation("InvitedByStudent");
 
                     b.Navigation("Student");
+                });
+
+            modelBuilder.Entity("SeOne.Domain.Entities.ClassGroup", b =>
+                {
+                    b.HasOne("SeOne.Domain.Entities.CourseClass", null)
+                        .WithMany()
+                        .HasForeignKey("ClassId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("SeOne.Domain.Entities.ClassGroupMember", b =>
+                {
+                    b.HasOne("SeOne.Domain.Entities.ClassGroup", null)
+                        .WithMany()
+                        .HasForeignKey("GroupId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("SeOne.Domain.Entities.ClassGroupMessage", b =>
+                {
+                    b.HasOne("SeOne.Domain.Entities.ClassGroup", null)
+                        .WithMany()
+                        .HasForeignKey("GroupId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("SeOne.Domain.Entities.ClassInvite", b =>
