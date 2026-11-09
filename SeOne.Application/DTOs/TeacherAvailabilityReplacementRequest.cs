@@ -2,6 +2,7 @@ namespace SeOne.Application.DTOs;
 
 public sealed class TeacherAvailabilityReplacementRequest
 {
+    public string? TimeZone { get; init; }
     public List<TeacherAvailabilityReplacementSlotRequest>? Slots { get; init; }
 }
 

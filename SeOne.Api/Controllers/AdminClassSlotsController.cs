@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using SeOne.Api.Utilities;
 using SeOne.Application.DTOs;
 using SeOne.Application.Interfaces;
 using SeOne.Domain.Entities;
@@ -58,30 +59,41 @@ public sealed class AdminClassSlotsController : ControllerBase
         if (slot is null)
             return NotFound(new { message = "Class slot not found." });
 
-        var startsAt = request.StartsAt ?? slot.ScheduledDate.Date + slot.StartTime;
-        var endsAt = request.EndsAt ?? slot.ScheduledDate.Date + slot.EndTime;
+        var startsAt = request.StartsAt?.UtcDateTime ?? ClassSlotTime.GetStartUtc(slot);
+        var endsAt = request.EndsAt?.UtcDateTime ?? ClassSlotTime.GetEndUtc(slot);
         var classType = NormalizeClassType(request.ClassType ?? slot.Type);
         var capacity = classType == "semi_private" ? 4 : request.Capacity ?? slot.MaxCapacity;
         var basePrice = request.BasePrice ?? slot.BasePrice;
         var finalPrice = request.FinalPrice ?? (request.BasePrice.HasValue ? basePrice : slot.FinalPrice);
         var currency = request.Currency?.Trim().ToUpperInvariant() ?? slot.Currency;
+        if (!ClassSlotTime.TryGetTimeZone(request.TimeZone ?? slot.TimeZone, out _, out var timeZoneId))
+            return BadRequest(new { message = "TimeZone must be a valid IANA or system time-zone identifier." });
 
-        if (startsAt == default || endsAt <= startsAt || startsAt.Date != endsAt.Date ||
-            capacity is < 1 or > 500 ||
-            !IsSupportedClassType(classType) ||
-            basePrice < 0 || finalPrice < 0 || string.IsNullOrWhiteSpace(currency) || currency.Length != 3)
-            return BadRequest(new { message = "Class slot details are invalid." });
+        if (startsAt == default)
+            return BadRequest(new { message = "A valid class start time is required." });
+        if (endsAt <= startsAt || endsAt - startsAt > TimeSpan.FromHours(24))
+            return BadRequest(new { message = "The class end time must be after its start time and the duration cannot exceed 24 hours." });
+        if (!IsSupportedClassType(classType))
+            return BadRequest(new { message = "ClassType must be public, private, or semi_private." });
+        if (capacity is < 1 or > 500)
+            return BadRequest(new { message = "Class capacity must be between 1 and 500 (semi_private is fixed at 4)." });
+        if (basePrice < 0 || finalPrice < 0)
+            return BadRequest(new { message = "Class prices cannot be negative." });
+        if (string.IsNullOrWhiteSpace(currency) || currency.Length != 3)
+            return BadRequest(new { message = "Currency must be a three-letter ISO currency code such as IRR or USD." });
 
         var currentEnrollment = await _db.Set<ClassEnrollment>()
-            .CountAsync(x => x.ClassId == slotId && x.Status != "cancelled", cancellationToken);
+            .CountAsync(x => x.ClassId == slotId && (x.Status == "confirmed" || x.Status == "active" || x.Status == "pending"), cancellationToken);
         if (capacity < currentEnrollment)
             return Conflict(new { message = "Capacity cannot be lower than the current enrollment count." });
 
-        var scheduleChanged = startsAt != slot.ScheduledDate.Date + slot.StartTime ||
-                              endsAt != slot.ScheduledDate.Date + slot.EndTime;
+        var oldStart = ClassSlotTime.GetStartUtc(slot);
+        var oldEnd = ClassSlotTime.GetEndUtc(slot);
+        var scheduleChanged = startsAt != oldStart || endsAt != oldEnd;
         slot.ScheduledDate = startsAt.Date;
         slot.StartTime = startsAt.TimeOfDay;
         slot.EndTime = endsAt.TimeOfDay;
+        slot.TimeZone = timeZoneId;
         slot.Type = classType;
         slot.MaxCapacity = capacity;
         slot.BasePrice = basePrice;
@@ -93,8 +105,8 @@ public sealed class AdminClassSlotsController : ControllerBase
             slot.Description = request.Description;
         if (!string.IsNullOrWhiteSpace(request.Level))
             slot.Level = request.Level.Trim();
-        // Teacher role/language is course-scoped in the current domain model.
-        // Do not overwrite CourseClass.Subject (the course category) with it.
+        if (!string.IsNullOrWhiteSpace(request.TeacherRole))
+            slot.Subject = request.TeacherRole.Trim();
 
         if (scheduleChanged)
         {
@@ -102,15 +114,15 @@ public sealed class AdminClassSlotsController : ControllerBase
                 .FirstOrDefaultAsync(x => x.ClassSlotId == slotId && x.Status == "confirmed", cancellationToken);
             if (assignment is not null)
             {
-                var availableTeachers = await GetAvailableTeachersAsync(slot, cancellationToken);
-                if (!availableTeachers.Any(x => x.TeacherId == assignment.TeacherId))
+                var eligibleTeachers = await GetAvailableTeachersAsync(slot, cancellationToken);
+                if (!eligibleTeachers.Any(x => x.TeacherId == assignment.TeacherId))
                     return Conflict(new { message = "The assigned teacher is unavailable for the updated schedule." });
             }
         }
 
         await _db.SaveChangesAsync(cancellationToken);
-        var confirmedAssignment = slot.TeacherAssignments
-            .FirstOrDefault(item => item.Status == "confirmed");
+        var confirmedAssignment = slot.TeacherAssignments.FirstOrDefault(item => item.Status == "confirmed");
+        await _classGroupProvisioningService.EnsureForClassAsync(slotId, cancellationToken);
         return Ok(MapSlot(slot, confirmedAssignment, currentEnrollment));
     }
 
@@ -304,12 +316,23 @@ public sealed class AdminClassSlotsController : ControllerBase
         var classType = NormalizeClassType(request.ClassType);
         var capacity = classType == "semi_private" ? 4 : request.Capacity;
         var finalPrice = request.FinalPrice ?? request.BasePrice;
-        if (request.StartsAt == default || request.EndsAt <= request.StartsAt ||
-            request.StartsAt.Date != request.EndsAt.Date ||
-            capacity is < 1 or > 500 || request.BasePrice < 0 || finalPrice < 0 ||
-            !IsSupportedClassType(classType) ||
-            string.IsNullOrWhiteSpace(currency) || currency.Length != 3)
-            return BadRequest(new { message = "Class slot details are invalid." });
+        if (!ClassSlotTime.TryGetTimeZone(request.TimeZone, out _, out var timeZoneId))
+            return BadRequest(new { message = "TimeZone must be a valid IANA or system time-zone identifier." });
+
+        var startsAt = request.StartsAt.UtcDateTime;
+        var endsAt = request.EndsAt.UtcDateTime;
+        if (request.StartsAt == default || request.EndsAt == default || startsAt == default)
+            return BadRequest(new { message = "Valid class start and end times are required." });
+        if (endsAt <= startsAt || endsAt - startsAt > TimeSpan.FromHours(24))
+            return BadRequest(new { message = "The class end time must be after its start time and the duration cannot exceed 24 hours." });
+        if (!IsSupportedClassType(classType))
+            return BadRequest(new { message = "ClassType must be public, private, or semi_private." });
+        if (capacity is < 1 or > 500)
+            return BadRequest(new { message = "Class capacity must be between 1 and 500 (semi_private is fixed at 4)." });
+        if (request.BasePrice < 0 || finalPrice < 0)
+            return BadRequest(new { message = "Class prices cannot be negative." });
+        if (string.IsNullOrWhiteSpace(currency) || currency.Length != 3)
+            return BadRequest(new { message = "Currency must be a three-letter ISO currency code such as IRR or USD." });
 
         var slot = new CourseClass
         {
@@ -319,16 +342,16 @@ public sealed class AdminClassSlotsController : ControllerBase
             Title = string.IsNullOrWhiteSpace(request.Title) ? course.Title : request.Title.Trim(),
             Description = request.Description ?? course.Description,
             Level = string.IsNullOrWhiteSpace(request.Level) ? course.Level : request.Level.Trim(),
-            Subject = course.Category,
+            Subject = string.IsNullOrWhiteSpace(request.TeacherRole) ? course.Category : request.TeacherRole.Trim(),
             Type = classType,
             MaxCapacity = capacity,
             BasePrice = request.BasePrice,
             FinalPrice = finalPrice,
             Currency = currency,
-            ScheduledDate = request.StartsAt.Date,
-            StartTime = request.StartsAt.TimeOfDay,
-            EndTime = request.EndsAt.TimeOfDay,
-            TimeZone = "UTC",
+            ScheduledDate = startsAt.Date,
+            StartTime = startsAt.TimeOfDay,
+            EndTime = endsAt.TimeOfDay,
+            TimeZone = timeZoneId,
             Status = "scheduled",
             CreatedAt = DateTime.UtcNow
         };
@@ -340,13 +363,13 @@ public sealed class AdminClassSlotsController : ControllerBase
         {
             id = slot.Id,
             courseId = slot.CourseId,
-            startsAt = DateTime.SpecifyKind(slot.ScheduledDate.Date + slot.StartTime, DateTimeKind.Utc),
-            endsAt = DateTime.SpecifyKind(slot.ScheduledDate.Date + slot.EndTime, DateTimeKind.Utc),
+            startsAt = ClassSlotTime.GetStartUtc(slot),
+            endsAt = ClassSlotTime.GetEndUtc(slot),
             classType = slot.Type,
             title = slot.Title,
             description = slot.Description,
             level = slot.Level,
-            teacherRole = course.Language,
+            teacherRole = slot.Subject,
             language = course.Language,
             capacity = slot.MaxCapacity,
             enrollmentCount = 0,
@@ -377,8 +400,25 @@ public sealed class AdminClassSlotsController : ControllerBase
     public async Task<IActionResult> AssignTeacher(
         Guid slotId,
         [FromBody] AssignClassSlotTeacherRequest request,
-        CancellationToken cancellationToken) =>
-        await AssignTeacherToSlotAsync(slotId, request.TeacherId, false, cancellationToken);
+        CancellationToken cancellationToken)
+    {
+        if (request.TeacherId.HasValue)
+            return await AssignTeacherToSlotAsync(slotId, request.TeacherId.Value, false, cancellationToken);
+
+        var slot = await _db.Set<CourseClass>().FirstOrDefaultAsync(x => x.Id == slotId, cancellationToken);
+        if (slot is null)
+            return NotFound(new { message = "Class slot not found." });
+
+        var assignments = await _db.Set<ClassSlotTeacherAssignment>()
+            .Where(x => x.ClassSlotId == slotId && x.Status == "confirmed")
+            .ToListAsync(cancellationToken);
+        foreach (var assignment in assignments)
+            assignment.Status = "cancelled";
+        slot.TeacherId = null;
+        await _db.SaveChangesAsync(cancellationToken);
+        await _classGroupProvisioningService.EnsureForClassAsync(slotId, cancellationToken);
+        return NoContent();
+    }
 
     private async Task<IActionResult> AssignTeacherToSlotAsync(
         Guid slotId,
@@ -400,21 +440,42 @@ public sealed class AdminClassSlotsController : ControllerBase
         if (!availableTeachers.Any(x => x.TeacherId == teacher.Id))
             return Conflict(new { message = "The teacher is unavailable for this slot or has a conflicting confirmed class assignment." });
 
-        var existingAssignment = await _db.Set<ClassSlotTeacherAssignment>()
-            .FirstOrDefaultAsync(x => x.ClassSlotId == slotId, cancellationToken);
-        if (onlyCreate && existingAssignment?.Status == "confirmed")
+        var slotAssignments = await _db.Set<ClassSlotTeacherAssignment>()
+            .Where(x => x.ClassSlotId == slotId)
+            .OrderByDescending(x => x.CreatedAt)
+            .ToListAsync(cancellationToken);
+        if (onlyCreate && slotAssignments.Any(x => x.Status == "confirmed"))
             return Conflict(new { message = "A confirmed teacher assignment already exists for this slot." });
 
-        var assignment = existingAssignment ?? new ClassSlotTeacherAssignment
+        var currentConfirmed = slotAssignments.FirstOrDefault(x => x.Status == "confirmed");
+        if (currentConfirmed is not null && currentConfirmed.TeacherId == teacher.Id)
+        {
+            await _classGroupProvisioningService.EnsureForClassAsync(slotId, cancellationToken);
+            return Ok(new
+            {
+                assignmentId = currentConfirmed.Id,
+                slotId,
+                teacherId = teacher.Id,
+                teacherName = teacher.FullName,
+                teacherAvatarUrl = teacher.AvatarUrl,
+                status = currentConfirmed.Status,
+                createdAt = currentConfirmed.CreatedAt
+            });
+        }
+
+        foreach (var previous in slotAssignments.Where(x => x.Status == "confirmed"))
+            previous.Status = "cancelled";
+
+        // Keep the former assignment as history; a replacement receives a new ID.
+        var assignment = new ClassSlotTeacherAssignment
         {
             Id = Guid.NewGuid(),
             ClassSlotId = slotId,
+            TeacherId = teacher.Id,
+            Status = "confirmed",
+            CreatedAt = DateTime.UtcNow
         };
-        assignment.TeacherId = teacher.Id;
-        assignment.Status = "confirmed";
-        assignment.CreatedAt = DateTime.UtcNow;
-        if (existingAssignment is null)
-            _db.Add(assignment);
+        _db.Add(assignment);
         slot.TeacherId = teacher.Id;
         await _db.SaveChangesAsync(cancellationToken);
         await _classGroupProvisioningService.EnsureForClassAsync(slotId, cancellationToken);
@@ -454,7 +515,7 @@ public sealed class AdminClassSlotsController : ControllerBase
             Title = slot.Title,
             Description = slot.Description,
             Level = slot.Level,
-            TeacherRole = slot.Course.Language,
+            TeacherRole = slot.Subject,
             Language = slot.Course.Language,
             SlotId = slot.Id,
             CourseId = slot.CourseId,
@@ -462,8 +523,8 @@ public sealed class AdminClassSlotsController : ControllerBase
             TeacherId = assignment?.TeacherId,
             TeacherName = assignment?.Teacher.FullName,
             TeacherAvatarUrl = assignment?.Teacher.AvatarUrl,
-            StartsAt = DateTime.SpecifyKind(slot.ScheduledDate.Date + slot.StartTime, DateTimeKind.Utc),
-            EndsAt = DateTime.SpecifyKind(slot.ScheduledDate.Date + slot.EndTime, DateTimeKind.Utc),
+            StartsAt = ClassSlotTime.GetStartUtc(slot),
+            EndsAt = ClassSlotTime.GetEndUtc(slot),
             ClassType = slot.Type,
             Capacity = slot.MaxCapacity,
             EnrollmentCount = enrollmentCount,
@@ -496,33 +557,85 @@ public sealed class AdminClassSlotsController : ControllerBase
         CourseClass slot,
         CancellationToken cancellationToken)
     {
-        var startsAt = slot.ScheduledDate.Date + slot.StartTime;
-        var endsAt = slot.ScheduledDate.Date + slot.EndTime;
-        var day = slot.ScheduledDate.DayOfWeek;
+        var slotStartUtc = ClassSlotTime.GetStartUtc(slot);
+        var slotEndUtc = ClassSlotTime.GetEndUtc(slot);
+        var teachers = await _db.Users.AsNoTracking()
+            .Where(user => user.Role == UserRole.Teacher && user.AccountStatus == "active")
+            .OrderBy(user => user.FullName)
+            .ToListAsync(cancellationToken);
+        if (teachers.Count == 0)
+            return new List<AvailableClassSlotTeacherDto>();
 
-        return await _db.Users.AsNoTracking()
-            .Where(teacher => teacher.Role == UserRole.Teacher && teacher.AccountStatus == "active")
-            .Where(teacher => _db.Set<TeacherAvailability>().Any(availability =>
-                availability.TeacherId == teacher.Id &&
-                availability.DayOfWeek == day &&
-                availability.IsAvailable &&
-                availability.StartTime <= startsAt.TimeOfDay &&
-                availability.EndTime >= endsAt.TimeOfDay))
-            .Where(teacher => !_db.Set<ClassSlotTeacherAssignment>().Any(assignment =>
-                assignment.TeacherId == teacher.Id &&
-                assignment.Status == "confirmed" &&
-                assignment.ClassSlotId != slot.Id &&
-                assignment.ClassSlot.Status == "scheduled" &&
-                assignment.ClassSlot.ScheduledDate == slot.ScheduledDate &&
-                startsAt.TimeOfDay < assignment.ClassSlot.EndTime &&
-                assignment.ClassSlot.StartTime < endsAt.TimeOfDay))
-            .OrderBy(teacher => teacher.FullName)
-            .Select(teacher => new AvailableClassSlotTeacherDto
+        var teacherIds = teachers.Select(x => x.Id).ToArray();
+        var availabilities = await _db.Set<TeacherAvailability>().AsNoTracking()
+            .Where(x => teacherIds.Contains(x.TeacherId) && x.IsAvailable)
+            .ToListAsync(cancellationToken);
+        var profiles = await _db.Set<TeacherProfile>().AsNoTracking()
+            .Where(x => teacherIds.Contains(x.TeacherId))
+            .ToDictionaryAsync(x => x.TeacherId, cancellationToken);
+        var confirmedAssignments = await _db.Set<ClassSlotTeacherAssignment>().AsNoTracking()
+            .Include(x => x.ClassSlot)
+            .Where(x => teacherIds.Contains(x.TeacherId) &&
+                        x.Status == "confirmed" &&
+                        x.ClassSlotId != slot.Id &&
+                        x.ClassSlot.Status == "scheduled")
+            .ToListAsync(cancellationToken);
+
+        var result = new List<AvailableClassSlotTeacherDto>();
+        foreach (var teacher in teachers)
+        {
+            var teacherTimeZone = TimeZoneInfo.Utc;
+            if (!string.IsNullOrWhiteSpace(teacher.Timezone) &&
+                ClassSlotTime.TryGetTimeZone(teacher.Timezone, out var parsedTimeZone, out _))
+                teacherTimeZone = parsedTimeZone;
+
+            var localStart = TimeZoneInfo.ConvertTimeFromUtc(
+                DateTime.SpecifyKind(slotStartUtc, DateTimeKind.Utc), teacherTimeZone);
+            var localEnd = TimeZoneInfo.ConvertTimeFromUtc(
+                DateTime.SpecifyKind(slotEndUtc, DateTimeKind.Utc), teacherTimeZone);
+
+            // Weekly availability is expressed in the teacher's own local timezone.
+            // An overnight slot cannot be represented by one same-day availability row.
+            if (localStart.Date != localEnd.Date)
+                continue;
+
+            var matchingAvailability = availabilities
+                .Where(x => x.TeacherId == teacher.Id &&
+                            x.DayOfWeek == localStart.DayOfWeek &&
+                            x.StartTime <= localStart.TimeOfDay &&
+                            x.EndTime >= localEnd.TimeOfDay)
+                .OrderBy(x => x.StartTime)
+                .FirstOrDefault();
+            if (matchingAvailability is null)
+                continue;
+
+            var hasConflict = confirmedAssignments
+                .Where(x => x.TeacherId == teacher.Id)
+                .Any(x => ClassSlotTime.Overlaps(
+                    slotStartUtc,
+                    slotEndUtc,
+                    ClassSlotTime.GetStartUtc(x.ClassSlot),
+                    ClassSlotTime.GetEndUtc(x.ClassSlot)));
+            if (hasConflict)
+                continue;
+
+            profiles.TryGetValue(teacher.Id, out var profile);
+            var matched = $"{localStart:dddd}, {localStart:HH:mm}–{localEnd:HH:mm}";
+            result.Add(new AvailableClassSlotTeacherDto
             {
+                Id = teacher.Id,
+                Name = teacher.FullName,
                 TeacherId = teacher.Id,
                 TeacherName = teacher.FullName,
-                TeacherAvatarUrl = teacher.AvatarUrl
-            })
-            .ToListAsync(cancellationToken);
+                AvatarUrl = profile?.Avatar ?? teacher.AvatarUrl,
+                TeacherAvatarUrl = profile?.Avatar ?? teacher.AvatarUrl,
+                TeachingLanguage = profile?.TeachingLanguage ?? string.Empty,
+                Subject = profile?.Subject ?? slot.Subject,
+                MatchedAvailability = matched
+            });
+        }
+
+        return result;
     }
+
 }

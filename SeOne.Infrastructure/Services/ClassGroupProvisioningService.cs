@@ -9,25 +9,18 @@ public sealed class ClassGroupProvisioningService : IClassGroupProvisioningServi
 {
     private readonly SeOneDbContext _context;
 
-    public ClassGroupProvisioningService(SeOneDbContext context)
-    {
-        _context = context;
-    }
+    public ClassGroupProvisioningService(SeOneDbContext context) => _context = context;
 
     public async Task EnsureForClassAsync(Guid classId, CancellationToken cancellationToken = default)
     {
         var classItem = await _context.Set<CourseClass>()
             .AsNoTracking()
             .FirstOrDefaultAsync(x => x.Id == classId, cancellationToken);
-
         if (classItem is null)
-        {
             return;
-        }
 
         var group = await _context.Set<ClassGroup>()
             .FirstOrDefaultAsync(x => x.ClassId == classId, cancellationToken);
-
         if (group is null)
         {
             group = new ClassGroup
@@ -48,67 +41,56 @@ public sealed class ClassGroupProvisioningService : IClassGroupProvisioningServi
             group.IsActive = classItem.Status != "cancelled";
         }
 
-        var enrollments = await _context.Set<ClassEnrollment>()
+        var studentIds = await _context.Set<ClassEnrollment>()
             .AsNoTracking()
-            .Where(x => x.ClassId == classId && x.Status == "confirmed")
+            .Where(x => x.ClassId == classId &&
+                        (x.Status == "confirmed" || x.Status == "active"))
             .Select(x => x.StudentId)
+            .Distinct()
             .ToListAsync(cancellationToken);
+
+        var assignment = await _context.Set<ClassSlotTeacherAssignment>()
+            .AsNoTracking()
+            .Where(x => x.ClassSlotId == classId && x.Status == "confirmed")
+            .OrderByDescending(x => x.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var desiredMembers = new Dictionary<Guid, string>();
+        foreach (var studentId in studentIds)
+            desiredMembers[studentId] = "student";
+        if (assignment is not null)
+            desiredMembers[assignment.TeacherId] = "teacher";
+
+        // The composite key is GroupId + UserId. Update an existing member's
+        // role instead of inserting a duplicate when a user changes roles.
         var currentMembers = await _context.Set<ClassGroupMember>()
             .Where(x => x.GroupId == group.Id)
             .ToListAsync(cancellationToken);
-        var enrolledStudentIds = enrollments.ToHashSet();
 
         foreach (var member in currentMembers)
         {
-            if (member.Role == "student")
+            if (desiredMembers.TryGetValue(member.UserId, out var desiredRole))
             {
-                member.IsActive = enrolledStudentIds.Contains(member.UserId);
+                member.Role = desiredRole;
+                member.IsActive = group.IsActive;
+                desiredMembers.Remove(member.UserId);
+            }
+            else
+            {
+                member.IsActive = false;
             }
         }
 
-        var existingStudentIds = currentMembers
-            .Where(x => x.Role == "student")
-            .Select(x => x.UserId)
-            .ToHashSet();
-        foreach (var studentId in enrolledStudentIds.Except(existingStudentIds))
+        foreach (var pair in desiredMembers)
         {
             _context.Set<ClassGroupMember>().Add(new ClassGroupMember
             {
                 GroupId = group.Id,
-                UserId = studentId,
-                Role = "student",
+                UserId = pair.Key,
+                Role = pair.Value,
                 JoinedAt = DateTime.UtcNow,
-                IsActive = true
+                IsActive = group.IsActive
             });
-        }
-
-        var assignment = await _context.Set<ClassSlotTeacherAssignment>()
-            .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.ClassSlotId == classId && x.Status == "confirmed", cancellationToken);
-        foreach (var teacherMember in currentMembers.Where(x => x.Role == "teacher"))
-        {
-            teacherMember.IsActive = assignment is not null && teacherMember.UserId == assignment.TeacherId;
-        }
-
-        if (assignment is not null)
-        {
-            var teacherMember = currentMembers.FirstOrDefault(x => x.UserId == assignment.TeacherId);
-            if (teacherMember is null)
-            {
-                _context.Set<ClassGroupMember>().Add(new ClassGroupMember
-                {
-                    GroupId = group.Id,
-                    UserId = assignment.TeacherId,
-                    Role = "teacher",
-                    JoinedAt = DateTime.UtcNow,
-                    IsActive = true
-                });
-            }
-            else
-            {
-                teacherMember.Role = "teacher";
-                teacherMember.IsActive = true;
-            }
         }
 
         await _context.SaveChangesAsync(cancellationToken);

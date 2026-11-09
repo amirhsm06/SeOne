@@ -45,8 +45,9 @@ public sealed class ClassesController : ApiControllerBase
 
         if (!string.IsNullOrWhiteSpace(type) &&
             !string.Equals(type, "public", StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(type, "private", StringComparison.OrdinalIgnoreCase))
-            return BadRequest(new { message = "Type must be public or private." });
+            !string.Equals(type, "private", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(type.Replace('-', '_'), "semi_private", StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { message = "Type must be public, private, or semi_private." });
 
         // Build base query with proper includes
         var query = _db.Set<CourseClass>()
@@ -58,20 +59,14 @@ public sealed class ClassesController : ApiControllerBase
         if (teacherId.HasValue)
             query = query.Where(classItem => classItem.TeacherId == teacherId.Value);
         if (!string.IsNullOrWhiteSpace(type))
-            query = query.Where(classItem => classItem.Type == type.ToLowerInvariant());
+        {
+            var normalizedType = type.Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
+            query = query.Where(classItem => classItem.Type == normalizedType);
+        }
         if (!string.IsNullOrWhiteSpace(level))
             query = query.Where(classItem => classItem.Level == level.Trim());
         if (!string.IsNullOrWhiteSpace(subject))
             query = query.Where(classItem => classItem.Subject == subject.Trim());
-
-        // Apply availability before counting/pagination so full classes do not consume a page slot.
-        if (availableOnly == true)
-        {
-            query = query.Where(classItem =>
-                _db.Set<ClassEnrollment>().Count(enrollment =>
-                    enrollment.ClassId == classItem.Id && enrollment.Status != "cancelled")
-                < classItem.MaxCapacity);
-        }
 
         // Get total count before pagination
         var totalCount = await query.CountAsync(cancellationToken);
@@ -109,6 +104,14 @@ public sealed class ClassesController : ApiControllerBase
             .AsNoTracking()
             .Where(x => teacherIds.Contains(x.TeacherId))
             .ToDictionaryAsync(x => x.TeacherId, cancellationToken);
+
+        // Filter by available only (after getting counts)
+        if (availableOnly == true)
+        {
+            classesWithData = classesWithData
+                .Where(x => (enrollmentDict.TryGetValue(x.Id, out var count) ? count : 0) < x.MaxCapacity)
+                .ToList();
+        }
 
         // Map to DTOs
         var items = classesWithData.Select(classItem =>
@@ -189,7 +192,9 @@ public sealed class ClassesController : ApiControllerBase
         if (!TryParseTimes(request.StartTime, request.EndTime, out var startTime, out var endTime) ||
             request.ScheduledDate == default || request.ScheduledDate.Date < DateTime.UtcNow.Date ||
             request.MaxCapacity is < 1 or > 500 || request.BasePrice is < 0 ||
-            (!string.Equals(request.Type, "public", StringComparison.OrdinalIgnoreCase) && !string.Equals(request.Type, "private", StringComparison.OrdinalIgnoreCase)) ||
+            (!string.Equals(request.Type, "public", StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(request.Type, "private", StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(request.Type?.Replace('-', '_'), "semi_private", StringComparison.OrdinalIgnoreCase)) ||
             string.IsNullOrWhiteSpace(request.TimeZone) || request.TimeZone.Length > 100 ||
             !IsValidOptionalHttpsUrl(request.MeetingUrl))
             return BadRequest(new { message = "Class details are invalid." });
@@ -206,8 +211,8 @@ public sealed class ClassesController : ApiControllerBase
             Description = request.Description?.Trim() ?? course.Description,
             Level = string.IsNullOrWhiteSpace(request.Level) ? course.Level : request.Level.Trim(),
             Subject = string.IsNullOrWhiteSpace(request.Subject) ? course.Category : request.Subject.Trim(),
-            Type = request.Type.ToLowerInvariant(),
-            MaxCapacity = request.MaxCapacity,
+            Type = request.Type.Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_'),
+            MaxCapacity = string.Equals(request.Type.Trim().Replace('-', '_').Replace(' ', '_'), "semi_private", StringComparison.OrdinalIgnoreCase) ? 4 : request.MaxCapacity,
             BasePrice = request.BasePrice ?? course.Price,
             FinalPrice = request.BasePrice ?? course.Price,
             Currency = course.Currency,
@@ -427,9 +432,7 @@ public sealed class ClassesController : ApiControllerBase
         inviteCode = enrollment.InviteCode,
         invitedByStudentId = enrollment.InvitedByStudentId,
         enrolledAt = enrollment.EnrolledAt,
-        cancelledAt = enrollment.CancelledAt,
-        paymentRequired = enrollment.FinalPrice > 0m,
-        paymentProcessingAvailable = false
+        cancelledAt = enrollment.CancelledAt
     };
 
     private static decimal GetFinalPrice(CourseClass classItem) => classItem.FinalPrice;

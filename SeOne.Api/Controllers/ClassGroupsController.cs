@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using SeOne.Application.Interfaces;
 using SeOne.Domain.Entities;
 using SeOne.Infrastructure.Persistence;
 
@@ -8,68 +9,51 @@ namespace SeOne.Api.Controllers;
 
 [ApiController]
 [Route("api/class-groups")]
-[Authorize(Roles = "Student,Teacher,Admin")]
+[Authorize]
 public sealed class ClassGroupsController : ApiControllerBase
 {
-    private const int MaximumMessageLength = 5000;
     private readonly SeOneDbContext _db;
+    private readonly IClassGroupProvisioningService _groupProvisioning;
 
-    public ClassGroupsController(SeOneDbContext db) => _db = db;
+    public ClassGroupsController(
+        SeOneDbContext db,
+        IClassGroupProvisioningService groupProvisioning)
+    {
+        _db = db;
+        _groupProvisioning = groupProvisioning;
+    }
 
     [HttpGet("{groupId:guid}")]
     public async Task<IActionResult> GetGroup(Guid groupId, CancellationToken cancellationToken)
     {
-        var group = await _db.ClassGroups.AsNoTracking()
+        var group = await _db.Set<ClassGroup>()
+            .AsNoTracking()
             .FirstOrDefaultAsync(x => x.Id == groupId, cancellationToken);
-        if (group is null)
-            return NotFound();
+        if (group is null || !group.IsActive)
+            return NotFound(new { message = "Class group not found." });
+
+        // Backfill memberships for older confirmed enrollments and assignments.
+        await _groupProvisioning.EnsureForClassAsync(group.ClassId, cancellationToken);
 
         if (!await CanAccessGroupAsync(groupId, cancellationToken))
             return Forbid();
 
-        var classItem = await _db.CourseClasses.AsNoTracking()
-            .Include(x => x.Course)
-            .Include(x => x.Teacher)
-            .FirstOrDefaultAsync(x => x.Id == group.ClassId, cancellationToken);
-        if (classItem is null)
-            return NotFound();
-
-        var members = await (
-            from member in _db.ClassGroupMembers.AsNoTracking()
+        var teacherName = await (
+            from member in _db.Set<ClassGroupMember>().AsNoTracking()
             join user in _db.Users.AsNoTracking() on member.UserId equals user.Id
-            where member.GroupId == groupId && member.IsActive
-            orderby member.Role, user.FullName
-            select new
-            {
-                userId = user.Id,
-                name = user.FullName,
-                avatarUrl = user.AvatarUrl,
-                role = member.Role,
-                joinedAt = member.JoinedAt
-            })
-            .ToListAsync(cancellationToken);
+            where member.GroupId == groupId && member.IsActive && member.Role == "teacher"
+            select user.FullName
+        ).FirstOrDefaultAsync(cancellationToken) ?? string.Empty;
 
-        var assignedTeacher = await _db.ClassSlotTeacherAssignments.AsNoTracking()
-            .Where(x => x.ClassSlotId == group.ClassId && x.Status == "confirmed")
-            .OrderBy(x => x.CreatedAt)
-            .Select(x => new { id = x.Teacher.Id, name = x.Teacher.FullName, avatarUrl = x.Teacher.AvatarUrl })
-            .FirstOrDefaultAsync(cancellationToken);
+        var memberCount = await _db.Set<ClassGroupMember>().AsNoTracking()
+            .CountAsync(x => x.GroupId == groupId && x.IsActive, cancellationToken);
 
         return Ok(new
         {
             id = group.Id,
-            classId = group.ClassId,
             title = group.Title,
-            groupType = group.GroupType,
-            isActive = group.IsActive,
-            createdAt = group.CreatedAt,
-            course = new { id = classItem.CourseId, title = classItem.Course.Title },
-            scheduledDate = classItem.ScheduledDate,
-            startTime = classItem.StartTime.ToString(@"hh\:mm"),
-            endTime = classItem.EndTime.ToString(@"hh\:mm"),
-            timeZone = classItem.TimeZone,
-            teacher = assignedTeacher,
-            members
+            teacherName,
+            memberCount
         });
     }
 
@@ -79,70 +63,71 @@ public sealed class ClassGroupsController : ApiControllerBase
         [FromQuery] int limit = 200,
         CancellationToken cancellationToken = default)
     {
-        if (limit is < 1 or > 200)
-            return BadRequest(new { message = "limit must be between 1 and 200." });
-
-        var group = await _db.ClassGroups.AsNoTracking()
-            .FirstOrDefaultAsync(x => x.Id == groupId, cancellationToken);
+        var group = await _db.Set<ClassGroup>().AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == groupId && x.IsActive, cancellationToken);
         if (group is null)
-            return NotFound();
+            return NotFound(new { message = "Class group not found." });
+
+        await _groupProvisioning.EnsureForClassAsync(group.ClassId, cancellationToken);
         if (!await CanAccessGroupAsync(groupId, cancellationToken))
             return Forbid();
 
-        var messages = await _db.ClassGroupMessages.AsNoTracking()
-            .Where(x => x.GroupId == groupId)
-            .OrderByDescending(x => x.CreatedAt)
-            .ThenByDescending(x => x.Id)
-            .Take(limit)
-            .ToListAsync(cancellationToken);
-
-        var senderIds = messages.Select(x => x.SenderId).Distinct().ToArray();
-        var senders = await _db.Users.AsNoTracking()
-            .Where(x => senderIds.Contains(x.Id))
-            .ToDictionaryAsync(x => x.Id, cancellationToken);
-
-        var result = messages
-            .OrderBy(x => x.CreatedAt)
-            .ThenBy(x => x.Id)
-            .Select(message => new
+        limit = Math.Clamp(limit, 1, 200);
+        var messages = await (
+            from message in _db.Set<ClassGroupMessage>().AsNoTracking()
+            join sender in _db.Users.AsNoTracking() on message.SenderId equals sender.Id
+            where message.GroupId == groupId
+            orderby message.CreatedAt descending, message.Id descending
+            select new
             {
                 id = message.Id,
-                groupId = message.GroupId,
                 senderId = message.SenderId,
+                senderName = sender.FullName,
                 senderRole = message.SenderRole,
-                senderName = senders.TryGetValue(message.SenderId, out var sender) ? sender.FullName : "Former user",
-                senderAvatarUrl = senders.TryGetValue(message.SenderId, out var senderForAvatar) ? senderForAvatar.AvatarUrl : null,
                 content = message.Content,
                 createdAt = message.CreatedAt
-            })
-            .ToArray();
+            }
+        ).Take(limit).ToListAsync(cancellationToken);
 
-        return Ok(result);
+        messages.Reverse();
+        return Ok(new { items = messages });
     }
 
     [HttpPost("{groupId:guid}/messages")]
     public async Task<IActionResult> SendMessage(
         Guid groupId,
-        [FromBody] CreateClassGroupMessageRequest request,
+        [FromBody] SendClassGroupMessageRequest? request,
         CancellationToken cancellationToken)
     {
-        var group = await _db.ClassGroups
-            .FirstOrDefaultAsync(x => x.Id == groupId, cancellationToken);
+        var group = await _db.Set<ClassGroup>().AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == groupId && x.IsActive, cancellationToken);
         if (group is null)
-            return NotFound();
+            return NotFound(new { message = "Class group not found." });
+
+        await _groupProvisioning.EnsureForClassAsync(group.ClassId, cancellationToken);
         if (!await CanAccessGroupAsync(groupId, cancellationToken))
             return Forbid();
-        if (!group.IsActive)
-            return Conflict(new { message = "This class group is no longer active." });
 
-        var content = request.Content?.Trim();
-        if (string.IsNullOrWhiteSpace(content) || content.Length > MaximumMessageLength)
-            return BadRequest(new { message = $"Message content is required and cannot exceed {MaximumMessageLength} characters." });
+        var content = request?.Content?.Trim();
+        if (string.IsNullOrWhiteSpace(content))
+            return BadRequest(new { message = "Message content is required." });
+        if (content.Length > 5000)
+            return BadRequest(new { message = "Message content cannot exceed 5000 characters." });
 
         var senderId = RequireUserId();
-        var senderRole = User.IsInRole("Admin") ? "admin"
-            : User.IsInRole("Teacher") ? "teacher"
-            : "student";
+        var sender = await _db.Users.AsNoTracking()
+            .Where(x => x.Id == senderId)
+            .Select(x => new { x.Id, x.FullName, x.Role })
+            .FirstOrDefaultAsync(cancellationToken);
+        if (sender is null)
+            return Unauthorized();
+
+        var senderRole = sender.Role switch
+        {
+            SeOne.Domain.Enums.UserRole.Admin => "admin",
+            SeOne.Domain.Enums.UserRole.Teacher => "teacher",
+            _ => "student"
+        };
 
         var message = new ClassGroupMessage
         {
@@ -154,21 +139,15 @@ public sealed class ClassGroupsController : ApiControllerBase
             CreatedAt = DateTime.UtcNow
         };
 
-        _db.ClassGroupMessages.Add(message);
+        _db.Set<ClassGroupMessage>().Add(message);
         await _db.SaveChangesAsync(cancellationToken);
-
-        var senderName = await _db.Users.AsNoTracking()
-            .Where(x => x.Id == senderId)
-            .Select(x => x.FullName)
-            .FirstOrDefaultAsync(cancellationToken) ?? "User";
 
         return Ok(new
         {
             id = message.Id,
-            groupId = message.GroupId,
             senderId = message.SenderId,
+            senderName = sender.FullName,
             senderRole = message.SenderRole,
-            senderName,
             content = message.Content,
             createdAt = message.CreatedAt
         });
@@ -176,48 +155,39 @@ public sealed class ClassGroupsController : ApiControllerBase
 
     private async Task<bool> CanAccessGroupAsync(Guid groupId, CancellationToken cancellationToken)
     {
-        if (User.IsInRole("Admin"))
-            return true;
-
-        var userId = RequireUserId();
-
-        var isActiveMember = await _db.ClassGroupMembers.AsNoTracking().AnyAsync(
-            x => x.GroupId == groupId && x.UserId == userId && x.IsActive,
-            cancellationToken);
-        if (isActiveMember)
-            return true;
-
-        // Existing classes may predate the group-membership provisioning service.
-        // Verify the underlying enrollment/teacher assignment as a safe fallback.
-        var classId = await _db.ClassGroups.AsNoTracking()
-            .Where(x => x.Id == groupId)
-            .Select(x => (Guid?)x.ClassId)
-            .FirstOrDefaultAsync(cancellationToken);
-        if (classId is null)
+        var userId = CurrentUserId;
+        if (!userId.HasValue)
             return false;
 
-        if (User.IsInRole("Student"))
+        var account = await _db.Users.AsNoTracking()
+            .Where(x => x.Id == userId.Value)
+            .Select(x => new { x.Role, x.AccountStatus })
+            .FirstOrDefaultAsync(cancellationToken);
+        if (account is null || account.AccountStatus != "active")
+            return false;
+
+        if (account.Role == SeOne.Domain.Enums.UserRole.Admin)
+            return true;
+
+        var expectedMemberRole = account.Role switch
         {
-            return await _db.ClassEnrollments.AsNoTracking().AnyAsync(
-                x => x.ClassId == classId.Value && x.StudentId == userId && x.Status == "confirmed",
+            SeOne.Domain.Enums.UserRole.Teacher => "teacher",
+            SeOne.Domain.Enums.UserRole.Student => "student",
+            _ => string.Empty
+        };
+        if (expectedMemberRole.Length == 0)
+            return false;
+
+        return await _db.Set<ClassGroupMember>().AsNoTracking()
+            .AnyAsync(x => x.GroupId == groupId &&
+                           x.UserId == userId.Value &&
+                           x.Role == expectedMemberRole &&
+                           x.IsActive,
                 cancellationToken);
-        }
-
-        if (User.IsInRole("Teacher"))
-        {
-            return await _db.CourseClasses.AsNoTracking().AnyAsync(
-                    x => x.Id == classId.Value && x.TeacherId == userId,
-                    cancellationToken)
-                || await _db.ClassSlotTeacherAssignments.AsNoTracking().AnyAsync(
-                    x => x.ClassSlotId == classId.Value && x.TeacherId == userId && x.Status == "confirmed",
-                    cancellationToken);
-        }
-
-        return false;
     }
 }
 
-public sealed class CreateClassGroupMessageRequest
+public sealed class SendClassGroupMessageRequest
 {
-    public string Content { get; set; } = string.Empty;
+    public string? Content { get; set; }
 }

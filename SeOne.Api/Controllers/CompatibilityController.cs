@@ -3,6 +3,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using SeOne.Api.Utilities;
 using SeOne.Application.DTOs;
 using SeOne.Application.Interfaces;
 using SeOne.Domain.Entities;
@@ -20,19 +21,22 @@ public class CompatibilityController : ApiControllerBase
     private readonly IProgressService _progressService;
     private readonly ITeacherAvailabilityService _availabilityService;
     private readonly IBlogService _blogService;
+    private readonly IClassGroupProvisioningService _classGroupProvisioningService;
 
     public CompatibilityController(
         SeOneDbContext db,
         IEnrollmentService enrollmentService,
         IProgressService progressService,
         ITeacherAvailabilityService availabilityService,
-        IBlogService blogService)
+        IBlogService blogService,
+        IClassGroupProvisioningService classGroupProvisioningService)
     {
         _db = db;
         _enrollmentService = enrollmentService;
         _progressService = progressService;
         _availabilityService = availabilityService;
         _blogService = blogService;
+        _classGroupProvisioningService = classGroupProvisioningService;
     }
 
     // -----------------------------------------------------------------
@@ -577,7 +581,20 @@ public class CompatibilityController : ApiControllerBase
             .ThenBy(x => x.ClassSlot.StartTime)
             .ToListAsync();
 
-        var slotIds = assignments.Select(x => x.ClassSlotId).ToArray();
+        var slotIds = assignments.Select(x => x.ClassSlotId).Distinct().ToArray();
+        foreach (var assignedSlotId in slotIds)
+            await _classGroupProvisioningService.EnsureForClassAsync(assignedSlotId);
+
+        var classGroups = await (
+            from member in _db.Set<ClassGroupMember>().AsNoTracking()
+            join classGroup in _db.Set<ClassGroup>().AsNoTracking() on member.GroupId equals classGroup.Id
+            where member.UserId == teacherId && member.Role == "teacher" &&
+                  member.IsActive && classGroup.IsActive && slotIds.Contains(classGroup.ClassId)
+            select new { classGroup.ClassId, classGroup.Id }
+        ).ToListAsync();
+        var groupBySlot = classGroups
+            .GroupBy(x => x.ClassId)
+            .ToDictionary(x => x.Key, x => (Guid?)x.First().Id);
         var enrollmentCounts = await _db.Set<ClassEnrollment>()
             .AsNoTracking()
             .Where(x => slotIds.Contains(x.ClassId) && x.Status != "cancelled")
@@ -595,7 +612,7 @@ public class CompatibilityController : ApiControllerBase
                 Title = slot.Title,
                 Description = slot.Description,
                 Level = slot.Level,
-                TeacherRole = slot.Course.Language,
+                TeacherRole = slot.Subject,
                 Language = slot.Course.Language,
                 SlotId = slot.Id,
                 CourseId = slot.CourseId,
@@ -603,8 +620,8 @@ public class CompatibilityController : ApiControllerBase
                 TeacherId = assignment.TeacherId,
                 TeacherName = assignment.Teacher.FullName,
                 TeacherAvatarUrl = assignment.Teacher.AvatarUrl,
-                StartsAt = DateTime.SpecifyKind(slot.ScheduledDate.Date + slot.StartTime, DateTimeKind.Utc),
-                EndsAt = DateTime.SpecifyKind(slot.ScheduledDate.Date + slot.EndTime, DateTimeKind.Utc),
+                StartsAt = ClassSlotTime.GetStartUtc(slot),
+                EndsAt = ClassSlotTime.GetEndUtc(slot),
                 ClassType = slot.Type,
                 Capacity = slot.MaxCapacity,
                 EnrollmentCount = count,
@@ -616,6 +633,7 @@ public class CompatibilityController : ApiControllerBase
                 Status = slot.Status,
                 EnrolledCount = count,
                 RemainingSeats = Math.Max(0, slot.MaxCapacity - count),
+                ClassGroupId = groupBySlot.GetValueOrDefault(slot.Id),
                 TeacherAssignments = new List<ClassSlotTeacherAssignmentDto>
                 {
                     new()
@@ -643,6 +661,16 @@ public class CompatibilityController : ApiControllerBase
         if (request?.Slots is null || request.Slots.Any(slot => slot is null))
             return BadRequest(new { message = "A slots array is required." });
 
+        var user = await _db.Users.FirstOrDefaultAsync(x => x.Id == teacherId);
+        if (user is null)
+            return Unauthorized();
+
+        var requestedTimeZone = string.IsNullOrWhiteSpace(request.TimeZone)
+            ? user.Timezone
+            : request.TimeZone.Trim();
+        if (!ClassSlotTime.TryGetTimeZone(requestedTimeZone, out _, out var timeZoneId))
+            return BadRequest(new { message = "TimeZone must be a valid IANA or system time-zone identifier." });
+
         var replacementSlots = new List<TeacherAvailabilityReplacementSlotDto>(request.Slots.Count);
         foreach (var slot in request.Slots)
         {
@@ -666,7 +694,15 @@ public class CompatibilityController : ApiControllerBase
         if (savedSlots is null)
             return Conflict(new { message = "Availability is invalid, overlapping, or contains a slot ID that does not belong to you." });
 
-        return Ok(savedSlots.Select(MapAvailability).ToList());
+        user.Timezone = timeZoneId;
+        user.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+
+        return Ok(new
+        {
+            timeZone = user.Timezone,
+            slots = savedSlots.Select(MapAvailability).ToList()
+        });
     }
 
     [HttpPost("teacher/availability")]
