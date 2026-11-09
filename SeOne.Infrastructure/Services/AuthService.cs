@@ -47,8 +47,8 @@ public class AuthService : IAuthService
         if (!Enum.TryParse<UserRole>(role, true, out var userRole))
             throw new ArgumentException("Invalid role.");
 
-        if (userRole != UserRole.Student)
-            throw new ArgumentException("Only Student accounts can be self-registered.");
+        if (userRole is not (UserRole.Student or UserRole.Teacher))
+            throw new ArgumentException("Only Student and Teacher accounts can be self-registered.");
 
         if (string.IsNullOrWhiteSpace(firstName))
             throw new ArgumentException("First name is required.");
