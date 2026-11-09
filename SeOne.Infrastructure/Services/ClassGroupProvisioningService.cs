@@ -50,7 +50,7 @@ public sealed class ClassGroupProvisioningService : IClassGroupProvisioningServi
 
         var enrollments = await _context.Set<ClassEnrollment>()
             .AsNoTracking()
-            .Where(x => x.ClassId == classId && x.Status != "cancelled")
+            .Where(x => x.ClassId == classId && x.Status == "confirmed")
             .Select(x => x.StudentId)
             .ToListAsync(cancellationToken);
         var currentMembers = await _context.Set<ClassGroupMember>()
@@ -85,6 +85,11 @@ public sealed class ClassGroupProvisioningService : IClassGroupProvisioningServi
         var assignment = await _context.Set<ClassSlotTeacherAssignment>()
             .AsNoTracking()
             .FirstOrDefaultAsync(x => x.ClassSlotId == classId && x.Status == "confirmed", cancellationToken);
+        foreach (var teacherMember in currentMembers.Where(x => x.Role == "teacher"))
+        {
+            teacherMember.IsActive = assignment is not null && teacherMember.UserId == assignment.TeacherId;
+        }
+
         if (assignment is not null)
         {
             var teacherMember = currentMembers.FirstOrDefault(x => x.UserId == assignment.TeacherId);

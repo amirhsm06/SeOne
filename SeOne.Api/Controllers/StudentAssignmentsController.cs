@@ -1,6 +1,7 @@
 ﻿using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using SeOne.Application.DTOs;
 using SeOne.Application.Interfaces;
 
@@ -102,6 +103,80 @@ public class StudentAssignmentsController : ControllerBase
         };
     }
 
+    [HttpPost("{assignmentId:guid}/complete")]
+    public async Task<IActionResult> CompleteAssignment(
+        Guid assignmentId,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] CreateSubmissionRequest? request,
+        CancellationToken cancellationToken)
+    {
+        var studentId = GetUserId();
+        var assignment = await _assignmentService.GetStudentAssignmentAsync(studentId, assignmentId);
+        if (assignment is null)
+            return NotFound(new { message = "Assignment is not available to this student." });
+
+        SubmissionOperationResult result;
+        var existingSubmission = assignment.Submission;
+        if (existingSubmission is null)
+        {
+            if (request is null)
+                return BadRequest(new { message = "Submission content or attachments are required." });
+
+            var draftResult = await _assignmentService.SaveDraftAsync(
+                studentId,
+                assignmentId,
+                request,
+                cancellationToken);
+            if (draftResult.Outcome != SubmissionOperationOutcome.Succeeded || draftResult.Submission is null)
+                return MapCompletionResult(draftResult);
+
+            existingSubmission = draftResult.Submission;
+        }
+        else if (existingSubmission.Status is not ("draft" or "returned"))
+        {
+            return Conflict(new { message = "This assignment submission cannot be completed in its current state." });
+        }
+
+        request ??= new CreateSubmissionRequest
+        {
+            Content = existingSubmission.Content,
+            Attachments = existingSubmission.Attachments
+        };
+
+        result = await _assignmentService.FinalizeSubmissionAsync(
+            studentId,
+            existingSubmission.Id,
+            request,
+            cancellationToken);
+
+        return MapCompletionResult(result);
+    }
+
+    [HttpPost("~/api/student/submissions/{submissionId:guid}/submit")]
+    public async Task<IActionResult> FinalizeSubmission(
+        Guid submissionId,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] CreateSubmissionRequest? request,
+        CancellationToken cancellationToken)
+    {
+        var studentId = GetUserId();
+        var submission = await _assignmentService.GetStudentSubmissionAsync(studentId, submissionId);
+        if (submission is null)
+            return NotFound(new { message = "Submission was not found." });
+
+        request ??= new CreateSubmissionRequest
+        {
+            Content = submission.Content,
+            Attachments = submission.Attachments
+        };
+
+        var result = await _assignmentService.FinalizeSubmissionAsync(
+            studentId,
+            submissionId,
+            request,
+            cancellationToken);
+
+        return MapCompletionResult(result);
+    }
+
     [HttpPost("{assignmentId:guid}/submissions/upload-grant")]
     public async Task<IActionResult> CreateSubmissionUploadGrant(
         Guid assignmentId,
@@ -128,6 +203,16 @@ public class StudentAssignmentsController : ControllerBase
             _ => StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = "Assignment file storage is unavailable." })
         };
     }
+
+    private IActionResult MapCompletionResult(SubmissionOperationResult result) => result.Outcome switch
+    {
+        SubmissionOperationOutcome.Succeeded when result.Submission is not null => Ok(result.Submission),
+        SubmissionOperationOutcome.InvalidRequest => BadRequest(new { message = "Submission content or attachments are invalid." }),
+        SubmissionOperationOutcome.AssignmentUnavailable => NotFound(new { message = "Assignment is not available to this student." }),
+        SubmissionOperationOutcome.SubmissionNotFound => NotFound(new { message = "Submission was not found." }),
+        SubmissionOperationOutcome.Conflict => Conflict(new { message = "A submission exists and its current status does not permit completion." }),
+        _ => StatusCode(StatusCodes.Status500InternalServerError)
+    };
 
     private Guid GetUserId()
     {

@@ -186,6 +186,11 @@ public sealed class AdminClassSlotsController : ControllerBase
             .FirstOrDefaultAsync(x => x.Id == request.DestinationSlotId && x.Status == "scheduled", cancellationToken);
         if (destination is null)
             return NotFound(new { message = "Destination class slot not found." });
+        var sourceSlot = await _db.Set<CourseClass>()
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == enrollment.ClassId, cancellationToken);
+        if (sourceSlot is null || sourceSlot.CourseId != destination.CourseId)
+            return BadRequest(new { message = "Enrollment can only be moved between slots of the same course." });
         if (destination.Id == enrollment.ClassId)
             return BadRequest(new { message = "The enrollment is already in this class slot." });
 

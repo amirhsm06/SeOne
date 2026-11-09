@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using SeOne.Application.DTOs;
+using SeOne.Application.Interfaces;
 using SeOne.Domain.Entities;
 using SeOne.Domain.Enums;
 using SeOne.Infrastructure.Persistence;
@@ -15,11 +16,16 @@ public sealed class ClassesController : ApiControllerBase
 {
     private readonly SeOneDbContext _db;
     private readonly IConfiguration _configuration;
+    private readonly IClassGroupProvisioningService _classGroupProvisioningService;
 
-    public ClassesController(SeOneDbContext db, IConfiguration configuration)
+    public ClassesController(
+        SeOneDbContext db,
+        IConfiguration configuration,
+        IClassGroupProvisioningService classGroupProvisioningService)
     {
         _db = db;
         _configuration = configuration;
+        _classGroupProvisioningService = classGroupProvisioningService;
     }
 
     [HttpGet]
@@ -308,6 +314,7 @@ public sealed class ClassesController : ApiControllerBase
 
         await _db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+        await _classGroupProvisioningService.EnsureForClassAsync(classId, cancellationToken);
         return Ok(MapEnrollment(enrollment));
     }
 
