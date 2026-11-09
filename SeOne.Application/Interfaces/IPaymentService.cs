@@ -31,6 +31,14 @@ public interface IPaymentService
         Stream fileStream,
         string note);
 
+    Task<ReceiptUploadResponse?> UploadReceiptForPaymentAsync(
+        Guid studentId,
+        Guid paymentId,
+        string fileName,
+        string mimeType,
+        Stream fileStream,
+        string note);
+
     /// <summary>
     /// Get all pending manual payment receipts awaiting admin verification.
     /// </summary>

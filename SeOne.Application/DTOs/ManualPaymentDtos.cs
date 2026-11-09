@@ -35,7 +35,7 @@ namespace SeOne.Application.DTOs
     public class ReceiptUploadResponse
     {
         public Guid PaymentId { get; set; }
-        public Guid ClassEnrollmentId { get; set; }
+        public Guid? ClassEnrollmentId { get; set; }
         public string ReceiptObjectPath { get; set; }
         public string Status { get; set; }
         public DateTime UploadedAt { get; set; }

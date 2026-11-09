@@ -20,6 +20,7 @@ public class PaymentsController : ControllerBase
         _paymentService = paymentService;
     }
 
+    [HttpPost]
     [HttpPost("create-intent")]
     public async Task<ActionResult<PaymentIntentDto>>
         CreateIntent(
@@ -104,10 +105,11 @@ public class PaymentsController : ControllerBase
     }
 
     [HttpPost("manual-class-receipt/{classEnrollmentId:guid}")]
+    [Consumes("multipart/form-data")]
     public async Task<ActionResult<ReceiptUploadResponse>> UploadManualReceipt(
-        Guid classEnrollmentId,
-        [FromForm] IFormFile receiptFile,
-        [FromForm] string note = "")
+       Guid classEnrollmentId,
+       IFormFile receiptFile,
+       [FromForm] string note = "")
     {
         var studentId = GetUserId();
 
@@ -134,6 +136,35 @@ public class PaymentsController : ControllerBase
             }
 
             return Ok(result);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
+    [HttpPost("{paymentId:guid}/receipt")]
+    [Consumes("multipart/form-data")]
+    public async Task<ActionResult<ReceiptUploadResponse>> UploadPaymentReceipt(
+        Guid paymentId,
+        IFormFile receiptFile,
+        [FromForm] string note = "")
+    {
+        if (receiptFile is null || receiptFile.Length == 0)
+            return BadRequest(new { message = "Receipt file is required." });
+
+        try
+        {
+            using var stream = receiptFile.OpenReadStream();
+            var result = await _paymentService.UploadReceiptForPaymentAsync(
+                GetUserId(),
+                paymentId,
+                receiptFile.FileName,
+                receiptFile.ContentType,
+                stream,
+                note);
+
+            return result is null ? NotFound() : Ok(result);
         }
         catch (ArgumentException ex)
         {
@@ -181,6 +212,7 @@ public class PaymentsController : ControllerBase
     }
 
     [HttpGet("manual-payment-settings")]
+    [HttpGet("~/api/payment/settings")]
     [AllowAnonymous]
     public async Task<ActionResult<ManualPaymentSettingsDto>> GetManualPaymentSettings()
     {

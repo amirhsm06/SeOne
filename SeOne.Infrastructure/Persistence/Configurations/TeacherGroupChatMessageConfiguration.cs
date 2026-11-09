@@ -9,11 +9,12 @@ public sealed class TeacherGroupChatMessageConfiguration : IEntityTypeConfigurat
     public void Configure(EntityTypeBuilder<TeacherGroupChatMessage> builder)
     {
         builder.ToTable("TeacherGroupChatMessages");
-        builder.HasKey(x => x.Id);
-        builder.Property(x => x.SenderRole).IsRequired().HasMaxLength(30);
-        builder.Property(x => x.Content).IsRequired().HasMaxLength(5000);
-        builder.Property(x => x.CreatedAt).HasColumnType("timestamp with time zone").IsRequired();
-        builder.HasIndex(x => new { x.CreatedAt, x.Id });
-        builder.HasIndex(x => x.SenderId);
+        builder.HasKey(message => message.Id);
+        builder.Property(message => message.SenderRole).HasMaxLength(30).IsRequired();
+        builder.Property(message => message.Content).HasMaxLength(5000).IsRequired();
+        builder.Property(message => message.IsAnnouncement).IsRequired();
+        builder.Property(message => message.CreatedAt).IsRequired();
+        builder.HasIndex(message => message.SenderId);
+        builder.HasIndex(message => new { message.CreatedAt, message.Id });
     }
 }

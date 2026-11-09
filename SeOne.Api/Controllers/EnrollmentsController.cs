@@ -49,6 +49,7 @@ public class EnrollmentsController : ControllerBase
         return CreatedAtAction(nameof(GetMyEnrollments), null, result);
     }
 
+    [HttpGet]
     [HttpGet("my")]
     [Authorize(Roles = "Student")]
     public async Task<ActionResult<List<EnrollmentDto>>> GetMyEnrollments()

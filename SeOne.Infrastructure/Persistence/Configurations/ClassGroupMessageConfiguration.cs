@@ -9,15 +9,12 @@ public sealed class ClassGroupMessageConfiguration : IEntityTypeConfiguration<Cl
     public void Configure(EntityTypeBuilder<ClassGroupMessage> builder)
     {
         builder.ToTable("ClassGroupMessages");
-        builder.HasKey(x => x.Id);
-        builder.Property(x => x.SenderRole).IsRequired().HasMaxLength(30);
-        builder.Property(x => x.Content).IsRequired().HasMaxLength(5000);
-        builder.Property(x => x.CreatedAt).HasColumnType("timestamp with time zone").IsRequired();
-        builder.HasIndex(x => new { x.GroupId, x.CreatedAt, x.Id });
-        builder.HasIndex(x => x.SenderId);
-        builder.HasOne<ClassGroup>()
-            .WithMany()
-            .HasForeignKey(x => x.GroupId)
-            .OnDelete(DeleteBehavior.Cascade);
+        builder.HasKey(message => message.Id);
+        builder.Property(message => message.SenderRole).HasMaxLength(30).IsRequired();
+        builder.Property(message => message.Content).HasMaxLength(5000).IsRequired();
+        builder.Property(message => message.CreatedAt).IsRequired();
+        builder.HasIndex(message => message.SenderId);
+        builder.HasIndex(message => new { message.GroupId, message.CreatedAt, message.Id });
+        builder.HasOne<ClassGroup>().WithMany().HasForeignKey(message => message.GroupId).OnDelete(DeleteBehavior.Cascade);
     }
 }

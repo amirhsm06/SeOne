@@ -226,6 +226,23 @@ public sealed class ClassesController : ApiControllerBase
         return CreatedAtAction(nameof(GetClass), new { classId = classItem.Id }, new { id = classItem.Id });
     }
 
+    [HttpPost("~/api/student/class-slots/{assignmentId:guid}/enroll")]
+    [Authorize(Roles = "Student")]
+    public async Task<IActionResult> EnrollByAssignment(
+        Guid assignmentId,
+        [FromBody] EnrollInClassRequest? request,
+        CancellationToken cancellationToken)
+    {
+        var slotId = await _db.Set<ClassSlotTeacherAssignment>()
+            .Where(x => x.Id == assignmentId && x.Status == "confirmed" && x.ClassSlot.Status == "scheduled")
+            .Select(x => (Guid?)x.ClassSlotId)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (slotId is null)
+            return NotFound(new { message = "Confirmed class-slot assignment not found." });
+
+        return await Enroll(slotId.Value, request, cancellationToken);
+    }
+
     [HttpPost("{classId:guid}/enroll")]
     [Authorize(Roles = "Student")]
     public async Task<IActionResult> Enroll(Guid classId, [FromBody] EnrollInClassRequest? request, CancellationToken cancellationToken)

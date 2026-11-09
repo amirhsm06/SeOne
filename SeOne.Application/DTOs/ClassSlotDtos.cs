@@ -17,6 +17,39 @@ public sealed class AssignClassSlotTeacherRequest
     public Guid TeacherId { get; set; }
 }
 
+public sealed class UpdateClassSlotRequest
+{
+    public DateTime? StartsAt { get; set; }
+    public DateTime? EndsAt { get; set; }
+    public string? ClassType { get; set; }
+    public int? Capacity { get; set; }
+    public decimal? BasePrice { get; set; }
+    public decimal? FinalPrice { get; set; }
+    public string? Currency { get; set; }
+}
+
+public sealed class AddClassSlotEnrollmentRequest
+{
+    public Guid StudentId { get; set; }
+}
+
+public sealed class CreateClassSlotAssignmentRequest
+{
+    public Guid SlotId { get; set; }
+    public Guid TeacherId { get; set; }
+}
+
+public sealed class UpdateClassSlotAssignmentRequest
+{
+    public Guid? TeacherId { get; set; }
+    public string? Status { get; set; }
+}
+
+public sealed class MoveClassEnrollmentRequest
+{
+    public Guid DestinationSlotId { get; set; }
+}
+
 public sealed class ClassSlotDto
 {
     public Guid Id { get; set; }

@@ -9,15 +9,13 @@ public sealed class ClassGroupConfiguration : IEntityTypeConfiguration<ClassGrou
     public void Configure(EntityTypeBuilder<ClassGroup> builder)
     {
         builder.ToTable("ClassGroups");
-        builder.HasKey(x => x.Id);
-        builder.Property(x => x.Title).IsRequired().HasMaxLength(180);
-        builder.Property(x => x.GroupType).IsRequired().HasMaxLength(20);
-        builder.Property(x => x.CreatedAt).HasColumnType("timestamp with time zone").IsRequired();
-        builder.HasIndex(x => x.ClassId).IsUnique();
-        builder.HasIndex(x => x.IsActive);
-        builder.HasOne<CourseClass>()
-            .WithMany()
-            .HasForeignKey(x => x.ClassId)
-            .OnDelete(DeleteBehavior.Cascade);
+        builder.HasKey(group => group.Id);
+        builder.Property(group => group.Title).HasMaxLength(180).IsRequired();
+        builder.Property(group => group.GroupType).HasMaxLength(20).IsRequired();
+        builder.Property(group => group.CreatedAt).IsRequired();
+        builder.Property(group => group.IsActive).IsRequired();
+        builder.HasIndex(group => group.ClassId).IsUnique();
+        builder.HasIndex(group => group.IsActive);
+        builder.HasOne<CourseClass>().WithMany().HasForeignKey(group => group.ClassId).OnDelete(DeleteBehavior.Cascade);
     }
 }

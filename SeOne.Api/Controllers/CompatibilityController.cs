@@ -568,8 +568,49 @@ public class CompatibilityController : ApiControllerBase
     public async Task<IActionResult> MyClassSlots()
     {
         var teacherId = RequireUserId();
-        var slots = await _availabilityService.GetMyAvailabilityAsync(teacherId);
-        return Ok(slots.Select(MapAvailability));
+        var assignments = await _db.Set<ClassSlotTeacherAssignment>()
+            .AsNoTracking()
+            .Include(x => x.ClassSlot).ThenInclude(x => x.Course)
+            .Include(x => x.Teacher)
+            .Where(x => x.TeacherId == teacherId && x.Status == "confirmed" && x.ClassSlot.Status == "scheduled")
+            .OrderBy(x => x.ClassSlot.ScheduledDate)
+            .ThenBy(x => x.ClassSlot.StartTime)
+            .ToListAsync();
+
+        var slotIds = assignments.Select(x => x.ClassSlotId).ToArray();
+        var enrollmentCounts = await _db.Set<ClassEnrollment>()
+            .AsNoTracking()
+            .Where(x => slotIds.Contains(x.ClassId) && x.Status != "cancelled")
+            .GroupBy(x => x.ClassId)
+            .Select(group => new { SlotId = group.Key, Count = group.Count() })
+            .ToDictionaryAsync(x => x.SlotId, x => x.Count);
+
+        return Ok(assignments.Select(assignment =>
+        {
+            var slot = assignment.ClassSlot;
+            var count = enrollmentCounts.GetValueOrDefault(slot.Id);
+            return new ClassSlotDto
+            {
+                Id = slot.Id,
+                SlotId = slot.Id,
+                CourseId = slot.CourseId,
+                AssignmentId = assignment.Id,
+                TeacherId = assignment.TeacherId,
+                TeacherName = assignment.Teacher.FullName,
+                TeacherAvatarUrl = assignment.Teacher.AvatarUrl,
+                StartsAt = DateTime.SpecifyKind(slot.ScheduledDate.Date + slot.StartTime, DateTimeKind.Utc),
+                EndsAt = DateTime.SpecifyKind(slot.ScheduledDate.Date + slot.EndTime, DateTimeKind.Utc),
+                ClassType = slot.Type,
+                Capacity = slot.MaxCapacity,
+                EnrollmentCount = count,
+                CurrentEnrollment = count,
+                BasePrice = slot.BasePrice,
+                FinalPrice = slot.FinalPrice,
+                Currency = slot.Currency,
+                CourseTitle = slot.Course.Title,
+                CourseImageUrl = slot.Course.ImageUrl
+            };
+        }));
     }
 
     [HttpPut("teacher/availability")]

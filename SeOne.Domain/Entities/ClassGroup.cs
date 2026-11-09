@@ -1,9 +1,5 @@
 namespace SeOne.Domain.Entities;
 
-/// <summary>
-/// One durable group per scheduled CourseClass. The group is provisioned only after
-/// the application confirms at least one enrollment (including payment confirmation where required).
-/// </summary>
 public sealed class ClassGroup
 {
     public Guid Id { get; set; } = Guid.NewGuid();

@@ -1,56 +1,32 @@
-using System.Data;
 using Microsoft.EntityFrameworkCore;
 using SeOne.Application.Interfaces;
 using SeOne.Domain.Entities;
-using SeOne.Domain.Enums;
 using SeOne.Infrastructure.Persistence;
 
 namespace SeOne.Infrastructure.Services;
 
-/// <summary>
-/// Keeps exactly one ClassGroup per CourseClass and synchronizes its active members.
-/// This service deliberately does not decide whether an enrollment is paid: callers must
-/// invoke it only after the existing payment/enrollment workflow has confirmed the seat.
-/// </summary>
 public sealed class ClassGroupProvisioningService : IClassGroupProvisioningService
 {
-    private readonly SeOneDbContext _db;
+    private readonly SeOneDbContext _context;
 
-    public ClassGroupProvisioningService(SeOneDbContext db) => _db = db;
-
-    public async Task<Guid?> EnsureForClassAsync(Guid classId, CancellationToken cancellationToken = default)
+    public ClassGroupProvisioningService(SeOneDbContext context)
     {
-        await using var transaction = await _db.Database.BeginTransactionAsync(
-            IsolationLevel.Serializable, cancellationToken);
+        _context = context;
+    }
 
-        var courseClass = await _db.CourseClasses
-            .SingleOrDefaultAsync(x => x.Id == classId, cancellationToken);
-
-        if (courseClass is null)
-            return null;
-
-        var group = await _db.ClassGroups
-            .SingleOrDefaultAsync(x => x.ClassId == classId, cancellationToken);
-
-        var confirmedEnrollments = await _db.ClassEnrollments
+    public async Task EnsureForClassAsync(Guid classId, CancellationToken cancellationToken = default)
+    {
+        var classItem = await _context.Set<CourseClass>()
             .AsNoTracking()
-            .Where(x => x.ClassId == classId)
-            .ToListAsync(cancellationToken);
+            .FirstOrDefaultAsync(x => x.Id == classId, cancellationToken);
 
-        // This project currently uses "confirmed" for paid/free confirmed seats.
-        // "active" is also accepted for compatibility with the newer API contract.
-        var activeStudentIds = confirmedEnrollments
-            .Where(x => IsActiveEnrollmentStatus(x.Status))
-            .Select(x => x.StudentId)
-            .Distinct()
-            .ToHashSet();
-
-        var classIsCancelled = string.Equals(courseClass.Status, "cancelled", StringComparison.OrdinalIgnoreCase);
-        if (group is null && (activeStudentIds.Count == 0 || classIsCancelled))
+        if (classItem is null)
         {
-            await transaction.CommitAsync(cancellationToken);
-            return null;
+            return;
         }
+
+        var group = await _context.Set<ClassGroup>()
+            .FirstOrDefaultAsync(x => x.ClassId == classId, cancellationToken);
 
         if (group is null)
         {
@@ -58,86 +34,78 @@ public sealed class ClassGroupProvisioningService : IClassGroupProvisioningServi
             {
                 Id = Guid.NewGuid(),
                 ClassId = classId,
-                Title = string.IsNullOrWhiteSpace(courseClass.Title)
-                    ? "Class group"
-                    : $"{courseClass.Title} — Group",
-                GroupType = NormalizeGroupType(courseClass.Type),
+                Title = classItem.Title,
+                GroupType = classItem.Type,
                 CreatedAt = DateTime.UtcNow,
-                IsActive = true
+                IsActive = classItem.Status != "cancelled"
             };
-            _db.ClassGroups.Add(group);
-            await _db.SaveChangesAsync(cancellationToken);
+            _context.Set<ClassGroup>().Add(group);
+        }
+        else
+        {
+            group.Title = classItem.Title;
+            group.GroupType = classItem.Type;
+            group.IsActive = classItem.Status != "cancelled";
         }
 
-        group.IsActive = !classIsCancelled;
-        group.Title = string.IsNullOrWhiteSpace(courseClass.Title)
-            ? group.Title
-            : $"{courseClass.Title} — Group";
-        group.GroupType = NormalizeGroupType(courseClass.Type);
-
-        var desiredMembers = new Dictionary<Guid, string>();
-
-        // CourseClass.TeacherId is the Identity User.Id for the assigned teacher.
-        // SeOne stores teacher approval state on User.AccountStatus.
-        var teacher = courseClass.TeacherId.HasValue
-            ? await _db.Users
-                .AsNoTracking()
-                .SingleOrDefaultAsync(
-                    x => x.Id == courseClass.TeacherId.Value
-                         && x.Role == UserRole.Teacher
-                         && x.AccountStatus == "active",
-                    cancellationToken)
-            : null;
-
-        if (teacher is not null)
-            desiredMembers[teacher.Id] = "Teacher";
-
-        foreach (var studentId in activeStudentIds)
-            desiredMembers[studentId] = "Student";
-
-        var existingMembers = await _db.ClassGroupMembers
+        var enrollments = await _context.Set<ClassEnrollment>()
+            .AsNoTracking()
+            .Where(x => x.ClassId == classId && x.Status != "cancelled")
+            .Select(x => x.StudentId)
+            .ToListAsync(cancellationToken);
+        var currentMembers = await _context.Set<ClassGroupMember>()
             .Where(x => x.GroupId == group.Id)
             .ToListAsync(cancellationToken);
+        var enrolledStudentIds = enrollments.ToHashSet();
 
-        foreach (var existing in existingMembers)
+        foreach (var member in currentMembers)
         {
-            if (desiredMembers.TryGetValue(existing.UserId, out var role) && !classIsCancelled)
+            if (member.Role == "student")
             {
-                existing.IsActive = true;
-                existing.Role = role;
-                desiredMembers.Remove(existing.UserId);
-            }
-            else
-            {
-                existing.IsActive = false;
+                member.IsActive = enrolledStudentIds.Contains(member.UserId);
             }
         }
 
-        if (!classIsCancelled)
+        var existingStudentIds = currentMembers
+            .Where(x => x.Role == "student")
+            .Select(x => x.UserId)
+            .ToHashSet();
+        foreach (var studentId in enrolledStudentIds.Except(existingStudentIds))
         {
-            foreach (var (userId, role) in desiredMembers)
+            _context.Set<ClassGroupMember>().Add(new ClassGroupMember
             {
-                _db.ClassGroupMembers.Add(new ClassGroupMember
+                GroupId = group.Id,
+                UserId = studentId,
+                Role = "student",
+                JoinedAt = DateTime.UtcNow,
+                IsActive = true
+            });
+        }
+
+        var assignment = await _context.Set<ClassSlotTeacherAssignment>()
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.ClassSlotId == classId && x.Status == "confirmed", cancellationToken);
+        if (assignment is not null)
+        {
+            var teacherMember = currentMembers.FirstOrDefault(x => x.UserId == assignment.TeacherId);
+            if (teacherMember is null)
+            {
+                _context.Set<ClassGroupMember>().Add(new ClassGroupMember
                 {
                     GroupId = group.Id,
-                    UserId = userId,
-                    Role = role,
+                    UserId = assignment.TeacherId,
+                    Role = "teacher",
                     JoinedAt = DateTime.UtcNow,
                     IsActive = true
                 });
             }
+            else
+            {
+                teacherMember.Role = "teacher";
+                teacherMember.IsActive = true;
+            }
         }
 
-        await _db.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-        return group.Id;
+        await _context.SaveChangesAsync(cancellationToken);
     }
-
-    private static bool IsActiveEnrollmentStatus(string? status) =>
-        string.Equals(status, "confirmed", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(status, "active", StringComparison.OrdinalIgnoreCase);
-
-    private static string NormalizeGroupType(string? type) =>
-        string.Equals(type, "private", StringComparison.OrdinalIgnoreCase) ? "private" : "public";
-
 }
