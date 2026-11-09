@@ -100,39 +100,74 @@ public class AdminController : ApiControllerBase
 
         return await EnrollStudent(id, r.CourseId);
     }
+    [HttpGet("courses/{courseId:guid}/enrollments")]
+    public async Task<IActionResult> CourseEnrollments(
+        Guid courseId,
+        CancellationToken cancellationToken)
+    {
+        var courseExists = await _db.Set<Course>()
+            .AnyAsync(course => course.Id == courseId, cancellationToken);
+        if (!courseExists)
+            return NotFound(new { message = "Course not found." });
+
+        var enrollments = await _db.Set<Enrollment>()
+            .AsNoTracking()
+            .Include(enrollment => enrollment.Student)
+            .Where(enrollment => enrollment.CourseId == courseId)
+            .OrderByDescending(enrollment => enrollment.EnrolledAt)
+            .Select(enrollment => new
+            {
+                id = enrollment.Id,
+                courseId = enrollment.CourseId,
+                studentId = enrollment.StudentId,
+                studentName = enrollment.Student.FullName,
+                studentEmail = enrollment.Student.Email,
+                status = "active",
+                enrolledAt = enrollment.EnrolledAt
+            })
+            .ToListAsync(cancellationToken);
+
+        return Ok(enrollments);
+    }
+
     [HttpDelete("students/{studentId:guid}/enrollments/{enrollmentId:guid}")]
     public async Task<IActionResult> CancelStudentEnrollment(
-     Guid studentId,
-     Guid enrollmentId,
-     [FromQuery] Guid courseId)
+        Guid studentId,
+        Guid enrollmentId,
+        [FromQuery] Guid? courseId,
+        CancellationToken cancellationToken)
     {
         if (courseId == Guid.Empty)
             return BadRequest(new ProblemDetails
             {
-                Title = "courseId query parameter is required.",
+                Title = "courseId must be a valid non-empty GUID when supplied.",
                 Status = StatusCodes.Status400BadRequest
             });
 
+        var query = _db.Set<Enrollment>()
+            .Where(enrollment =>
+                enrollment.Id == enrollmentId &&
+                enrollment.StudentId == studentId);
+
+        // The current frontend sends only studentId + enrollmentId. Keeping
+        // courseId optional preserves compatibility with older API clients.
+        if (courseId.HasValue)
+            query = query.Where(enrollment => enrollment.CourseId == courseId.Value);
+
         await using var transaction =
-            await _db.Database.BeginTransactionAsync();
+            await _db.Database.BeginTransactionAsync(cancellationToken);
 
-        var enrollment = await _db.Set<Enrollment>()
-            .FirstOrDefaultAsync(e =>
-                e.Id == enrollmentId &&
-                e.StudentId == studentId &&
-                e.CourseId == courseId);
-
+        var enrollment = await query.FirstOrDefaultAsync(cancellationToken);
         if (enrollment is null)
-            return NotFound();
+            return NotFound(new { message = "Student enrollment not found." });
 
         await _db.Set<LearningSession>()
-            .Where(s => s.EnrollmentId == enrollment.Id)
-            .ExecuteDeleteAsync();
+            .Where(session => session.EnrollmentId == enrollment.Id)
+            .ExecuteDeleteAsync(cancellationToken);
 
         _db.Remove(enrollment);
-
-        await _db.SaveChangesAsync();
-        await transaction.CommitAsync();
+        await _db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
 
         return NoContent();
     }
@@ -286,41 +321,6 @@ public class AdminController : ApiControllerBase
     public async Task<IActionResult> TeacherAvailability(Guid id){var slots=await _db.Set<TeacherAvailability>().Where(s=>s.TeacherId==id).OrderBy(s=>s.DayOfWeek).ThenBy(s=>s.StartTime).Select(s=>new{id=s.Id,dayOfWeek=s.DayOfWeek.ToString(),startTime=s.StartTime.ToString(@"hh\:mm"),endTime=s.EndTime.ToString(@"hh\:mm"),isBooked=_db.Set<Booking>().Any(b=>b.TeacherId==id&&b.Status!=BookingStatus.Cancelled&&((b.StartTime.TimeOfDay>=s.StartTime&&b.StartTime.TimeOfDay<s.EndTime)||(b.EndTime.TimeOfDay>s.StartTime&&b.EndTime.TimeOfDay<=s.EndTime))) }).ToListAsync();return Ok(slots);}
     [HttpPut("teachers/{id:guid}/availability")]
     public async Task<IActionResult> SetTeacherAvailability(Guid id,[FromBody] SlotsRequest r){if(!await _db.Users.AnyAsync(u=>u.Id==id&&u.Role==UserRole.Teacher))return NotFound();var existing=await _db.Set<TeacherAvailability>().Where(a=>a.TeacherId==id).ToListAsync();_db.RemoveRange(existing);foreach(var s in r.Slots??new()){if(!Enum.TryParse<DayOfWeek>(s.DayOfWeek,true,out var day))continue;if(!TimeSpan.TryParse(s.StartTime,CultureInfo.InvariantCulture,out var start)||!TimeSpan.TryParse(s.EndTime,CultureInfo.InvariantCulture,out var end)||end<=start)continue;_db.Add(new TeacherAvailability{Id=Guid.NewGuid(),TeacherId=id,DayOfWeek=day,StartTime=start,EndTime=end,IsAvailable=true,CreatedAt=DateTime.UtcNow});}await _db.SaveChangesAsync();var slots=await _db.Set<TeacherAvailability>().Where(a=>a.TeacherId==id).OrderBy(a=>a.DayOfWeek).ThenBy(a=>a.StartTime).Select(a=>new{id=a.Id,dayOfWeek=a.DayOfWeek.ToString(),startTime=a.StartTime.ToString(@"hh\:mm"),endTime=a.EndTime.ToString(@"hh\:mm"),isBooked=false}).ToListAsync();return Ok(new{slots});}
-
-    [HttpGet("courses/{courseId:guid}/enrollments")]
-    public async Task<IActionResult> CourseEnrollments(Guid courseId, CancellationToken cancellationToken)
-    {
-        var course = await _db.Set<Course>().AsNoTracking()
-            .Where(x => x.Id == courseId)
-            .Select(x => new { x.Id, x.Title })
-            .FirstOrDefaultAsync(cancellationToken);
-        if (course is null)
-            return NotFound(new { message = "Course not found." });
-
-        var directEnrollments = await _db.Set<Enrollment>().AsNoTracking()
-            .Include(x => x.Student)
-            .Where(x => x.CourseId == courseId)
-            .ToListAsync(cancellationToken);
-
-        var classEnrollments = await _db.Set<ClassEnrollment>().AsNoTracking()
-            .Include(x => x.Student)
-            .Include(x => x.CourseClass)
-            .Where(x => x.CourseClass.CourseId == courseId)
-            .ToListAsync(cancellationToken);
-
-        var rows = directEnrollments.Select(x => new CourseEnrollmentAdminRow(
-                x.Id, x.CourseId, course.Title, x.StudentId, x.Student.FullName,
-                x.Student.Email ?? string.Empty, x.EnrolledAt, "active", "course",
-                null, null, null))
-            .Concat(classEnrollments.Select(x => new CourseEnrollmentAdminRow(
-                x.Id, courseId, course.Title, x.StudentId, x.Student.FullName,
-                x.Student.Email ?? string.Empty, x.EnrolledAt, x.Status, "class",
-                x.ClassId, x.CourseClass.Title, x.FinalPrice)))
-            .OrderByDescending(x => x.EnrolledAt)
-            .ToArray();
-
-        return Ok(rows);
-    }
 
     [HttpGet("courses")]
     public async Task<IActionResult> Courses()
@@ -774,18 +774,3 @@ public sealed class ModuleRequest { public string? Title {get;set;} public strin
 public sealed class LessonRequest { public string? Title {get;set;} public string? Body {get;set;} public string? VideoUrl {get;set;} public int? Duration {get;set;} public int? Order {get;set;} }
 public sealed class SlotsRequest { public List<AdminSlotRequest>? Slots {get;set;} }
 public sealed class AdminSlotRequest { public string DayOfWeek {get;set;}="Monday"; public string StartTime {get;set;}="09:00"; public string EndTime {get;set;}="10:00"; }
-
-
-public sealed record CourseEnrollmentAdminRow(
-    Guid Id,
-    Guid CourseId,
-    string CourseTitle,
-    Guid StudentId,
-    string StudentName,
-    string StudentEmail,
-    DateTime EnrolledAt,
-    string Status,
-    string EnrollmentSource,
-    Guid? ClassId,
-    string? ClassTitle,
-    decimal? Amount);

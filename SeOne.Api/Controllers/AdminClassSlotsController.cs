@@ -52,21 +52,23 @@ public sealed class AdminClassSlotsController : ControllerBase
         CancellationToken cancellationToken)
     {
         var slot = await _db.Set<CourseClass>()
+            .Include(x => x.Course)
+            .Include(x => x.TeacherAssignments).ThenInclude(x => x.Teacher)
             .FirstOrDefaultAsync(x => x.Id == slotId, cancellationToken);
         if (slot is null)
             return NotFound(new { message = "Class slot not found." });
 
         var startsAt = request.StartsAt ?? slot.ScheduledDate.Date + slot.StartTime;
         var endsAt = request.EndsAt ?? slot.ScheduledDate.Date + slot.EndTime;
-        var classType = request.ClassType?.Trim().ToLowerInvariant() ?? slot.Type;
-        var capacity = request.Capacity ?? slot.MaxCapacity;
+        var classType = NormalizeClassType(request.ClassType ?? slot.Type);
+        var capacity = classType == "semi_private" ? 4 : request.Capacity ?? slot.MaxCapacity;
         var basePrice = request.BasePrice ?? slot.BasePrice;
         var finalPrice = request.FinalPrice ?? (request.BasePrice.HasValue ? basePrice : slot.FinalPrice);
         var currency = request.Currency?.Trim().ToUpperInvariant() ?? slot.Currency;
 
         if (startsAt == default || endsAt <= startsAt || startsAt.Date != endsAt.Date ||
             capacity is < 1 or > 500 ||
-            (!string.Equals(classType, "public", StringComparison.Ordinal) && !string.Equals(classType, "private", StringComparison.Ordinal)) ||
+            !IsSupportedClassType(classType) ||
             basePrice < 0 || finalPrice < 0 || string.IsNullOrWhiteSpace(currency) || currency.Length != 3)
             return BadRequest(new { message = "Class slot details are invalid." });
 
@@ -85,6 +87,14 @@ public sealed class AdminClassSlotsController : ControllerBase
         slot.BasePrice = basePrice;
         slot.FinalPrice = finalPrice;
         slot.Currency = currency;
+        if (!string.IsNullOrWhiteSpace(request.Title))
+            slot.Title = request.Title.Trim();
+        if (request.Description is not null)
+            slot.Description = request.Description;
+        if (!string.IsNullOrWhiteSpace(request.Level))
+            slot.Level = request.Level.Trim();
+        // Teacher role/language is course-scoped in the current domain model.
+        // Do not overwrite CourseClass.Subject (the course category) with it.
 
         if (scheduleChanged)
         {
@@ -99,7 +109,9 @@ public sealed class AdminClassSlotsController : ControllerBase
         }
 
         await _db.SaveChangesAsync(cancellationToken);
-        return Ok(new { id = slot.Id, courseId = slot.CourseId, startsAt, endsAt, classType, capacity, basePrice, finalPrice, currency });
+        var confirmedAssignment = slot.TeacherAssignments
+            .FirstOrDefault(item => item.Status == "confirmed");
+        return Ok(MapSlot(slot, confirmedAssignment, currentEnrollment));
     }
 
     [HttpGet("{slotId:guid}/enrollments")]
@@ -176,6 +188,9 @@ public sealed class AdminClassSlotsController : ControllerBase
         [FromBody] MoveClassEnrollmentRequest request,
         CancellationToken cancellationToken)
     {
+        var requestedDestinationSlotId = request.TargetSlotId != Guid.Empty
+            ? request.TargetSlotId
+            : request.DestinationSlotId;
         await using var transaction = await _db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, cancellationToken);
         var enrollment = await _db.Set<ClassEnrollment>()
             .FirstOrDefaultAsync(x => x.Id == enrollmentId, cancellationToken);
@@ -183,7 +198,7 @@ public sealed class AdminClassSlotsController : ControllerBase
             return NotFound(new { message = "Active class enrollment not found." });
 
         var destination = await _db.Set<CourseClass>()
-            .FirstOrDefaultAsync(x => x.Id == request.DestinationSlotId && x.Status == "scheduled", cancellationToken);
+            .FirstOrDefaultAsync(x => x.Id == requestedDestinationSlotId && x.Status == "scheduled", cancellationToken);
         if (destination is null)
             return NotFound(new { message = "Destination class slot not found." });
         var sourceSlot = await _db.Set<CourseClass>()
@@ -286,12 +301,13 @@ public sealed class AdminClassSlotsController : ControllerBase
             return NotFound(new { message = "Course not found." });
 
         var currency = request.Currency?.Trim().ToUpperInvariant();
+        var classType = NormalizeClassType(request.ClassType);
+        var capacity = classType == "semi_private" ? 4 : request.Capacity;
         var finalPrice = request.FinalPrice ?? request.BasePrice;
         if (request.StartsAt == default || request.EndsAt <= request.StartsAt ||
             request.StartsAt.Date != request.EndsAt.Date ||
-            request.Capacity is < 1 or > 500 || request.BasePrice < 0 || finalPrice < 0 ||
-            (!string.Equals(request.ClassType, "public", StringComparison.OrdinalIgnoreCase) &&
-             !string.Equals(request.ClassType, "private", StringComparison.OrdinalIgnoreCase)) ||
+            capacity is < 1 or > 500 || request.BasePrice < 0 || finalPrice < 0 ||
+            !IsSupportedClassType(classType) ||
             string.IsNullOrWhiteSpace(currency) || currency.Length != 3)
             return BadRequest(new { message = "Class slot details are invalid." });
 
@@ -300,12 +316,12 @@ public sealed class AdminClassSlotsController : ControllerBase
             Id = Guid.NewGuid(),
             CourseId = course.Id,
             TeacherId = null,
-            Title = course.Title,
-            Description = course.Description,
-            Level = course.Level,
+            Title = string.IsNullOrWhiteSpace(request.Title) ? course.Title : request.Title.Trim(),
+            Description = request.Description ?? course.Description,
+            Level = string.IsNullOrWhiteSpace(request.Level) ? course.Level : request.Level.Trim(),
             Subject = course.Category,
-            Type = request.ClassType.Trim().ToLowerInvariant(),
-            MaxCapacity = request.Capacity,
+            Type = classType,
+            MaxCapacity = capacity,
             BasePrice = request.BasePrice,
             FinalPrice = finalPrice,
             Currency = currency,
@@ -327,11 +343,21 @@ public sealed class AdminClassSlotsController : ControllerBase
             startsAt = DateTime.SpecifyKind(slot.ScheduledDate.Date + slot.StartTime, DateTimeKind.Utc),
             endsAt = DateTime.SpecifyKind(slot.ScheduledDate.Date + slot.EndTime, DateTimeKind.Utc),
             classType = slot.Type,
+            title = slot.Title,
+            description = slot.Description,
+            level = slot.Level,
+            teacherRole = course.Language,
+            language = course.Language,
             capacity = slot.MaxCapacity,
             enrollmentCount = 0,
             basePrice = slot.BasePrice,
             finalPrice = slot.FinalPrice,
-            currency = slot.Currency
+            currency = slot.Currency,
+            timeZone = slot.TimeZone,
+            status = slot.Status,
+            enrolledCount = 0,
+            remainingSeats = slot.MaxCapacity,
+            teacherAssignments = Array.Empty<object>()
         });
     }
 
@@ -405,11 +431,31 @@ public sealed class AdminClassSlotsController : ControllerBase
         });
     }
 
+    private static string NormalizeClassType(string? value)
+    {
+        var normalized = (value ?? "public").Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
+        return normalized switch
+        {
+            "semi_private" or "semiprivate" => "semi_private",
+            "public" => "public",
+            "private" => "private",
+            _ => normalized
+        };
+    }
+
+    private static bool IsSupportedClassType(string value) =>
+        value is "public" or "private" or "semi_private";
+
     private static ClassSlotDto MapSlot(CourseClass slot, ClassSlotTeacherAssignment? assignment, int enrollmentCount)
     {
         return new ClassSlotDto
         {
             Id = slot.Id,
+            Title = slot.Title,
+            Description = slot.Description,
+            Level = slot.Level,
+            TeacherRole = slot.Course.Language,
+            Language = slot.Course.Language,
             SlotId = slot.Id,
             CourseId = slot.CourseId,
             AssignmentId = assignment?.Id,
@@ -425,6 +471,22 @@ public sealed class AdminClassSlotsController : ControllerBase
             BasePrice = slot.BasePrice,
             FinalPrice = slot.FinalPrice,
             Currency = slot.Currency,
+            TimeZone = slot.TimeZone,
+            Status = slot.Status,
+            EnrolledCount = enrollmentCount,
+            RemainingSeats = Math.Max(0, slot.MaxCapacity - enrollmentCount),
+            TeacherAssignments = slot.TeacherAssignments
+                .Select(item => new ClassSlotTeacherAssignmentDto
+                {
+                    Id = item.Id,
+                    SlotId = item.ClassSlotId,
+                    TeacherId = item.TeacherId,
+                    Status = item.Status,
+                    SelectedAt = item.CreatedAt,
+                    TeacherName = item.Teacher.FullName,
+                    TeacherAvatarUrl = item.Teacher.AvatarUrl
+                })
+                .ToList(),
             CourseTitle = slot.Course.Title,
             CourseImageUrl = slot.Course.ImageUrl
         };

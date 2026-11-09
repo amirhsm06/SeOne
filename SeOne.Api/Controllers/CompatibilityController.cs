@@ -19,17 +19,20 @@ public class CompatibilityController : ApiControllerBase
     private readonly IEnrollmentService _enrollmentService;
     private readonly IProgressService _progressService;
     private readonly ITeacherAvailabilityService _availabilityService;
+    private readonly IBlogService _blogService;
 
     public CompatibilityController(
         SeOneDbContext db,
         IEnrollmentService enrollmentService,
         IProgressService progressService,
-        ITeacherAvailabilityService availabilityService)
+        ITeacherAvailabilityService availabilityService,
+        IBlogService blogService)
     {
         _db = db;
         _enrollmentService = enrollmentService;
         _progressService = progressService;
         _availabilityService = availabilityService;
+        _blogService = blogService;
     }
 
     // -----------------------------------------------------------------
@@ -589,6 +592,11 @@ public class CompatibilityController : ApiControllerBase
             return new ClassSlotDto
             {
                 Id = slot.Id,
+                Title = slot.Title,
+                Description = slot.Description,
+                Level = slot.Level,
+                TeacherRole = slot.Course.Language,
+                Language = slot.Course.Language,
                 SlotId = slot.Id,
                 CourseId = slot.CourseId,
                 AssignmentId = assignment.Id,
@@ -604,6 +612,23 @@ public class CompatibilityController : ApiControllerBase
                 BasePrice = slot.BasePrice,
                 FinalPrice = slot.FinalPrice,
                 Currency = slot.Currency,
+                TimeZone = slot.TimeZone,
+                Status = slot.Status,
+                EnrolledCount = count,
+                RemainingSeats = Math.Max(0, slot.MaxCapacity - count),
+                TeacherAssignments = new List<ClassSlotTeacherAssignmentDto>
+                {
+                    new()
+                    {
+                        Id = assignment.Id,
+                        SlotId = assignment.ClassSlotId,
+                        TeacherId = assignment.TeacherId,
+                        Status = assignment.Status,
+                        SelectedAt = assignment.CreatedAt,
+                        TeacherName = assignment.Teacher.FullName,
+                        TeacherAvatarUrl = assignment.Teacher.AvatarUrl
+                    }
+                },
                 CourseTitle = slot.Course.Title,
                 CourseImageUrl = slot.Course.ImageUrl
             };
@@ -669,6 +694,32 @@ public class CompatibilityController : ApiControllerBase
         var teacherId = RequireUserId();
         var ok = await _availabilityService.DeleteAsync(slotId, teacherId);
         return ok ? NoContent() : NotFound();
+    }
+
+    // -----------------------------------------------------------------
+    // Cambridge blog endpoint expected by the frontend.
+    // -----------------------------------------------------------------
+
+    [HttpGet("blog/cambridge")]
+    [AllowAnonymous]
+    public async Task<IActionResult> CambridgeBlog()
+    {
+        var posts = await _blogService.GetPublishedPostsAsync("en");
+        return Ok(new
+        {
+            posts = posts.Select(p => new
+            {
+                p.Id,
+                p.Title,
+                p.Excerpt,
+                p.Author,
+                date = p.CreatedAt,
+                p.ReadTime,
+                p.Category,
+                image = p.ImageUrl,
+                source = "cambridge"
+            })
+        });
     }
 
     private async Task<object> BuildModuleResponseAsync(CourseModule module, Guid userId, string role, List<Lesson> lessons)
