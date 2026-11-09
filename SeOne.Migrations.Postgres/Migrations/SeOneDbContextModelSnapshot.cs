@@ -645,6 +645,36 @@ namespace SeOne.Migrations.Postgres.Migrations
                     b.ToTable("ClassInvites", (string)null);
                 });
 
+            modelBuilder.Entity("SeOne.Domain.Entities.ClassSlotTeacherAssignment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ClassSlotId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<Guid>("TeacherId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ClassSlotId")
+                        .IsUnique();
+
+                    b.HasIndex("TeacherId", "Status");
+
+                    b.ToTable("ClassSlotTeacherAssignments", (string)null);
+                });
+
             modelBuilder.Entity("SeOne.Domain.Entities.ClassroomAttendance", b =>
                 {
                     b.Property<Guid>("Id")
@@ -936,6 +966,11 @@ namespace SeOne.Migrations.Postgres.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)");
+
                     b.Property<string>("Description")
                         .IsRequired()
                         .HasMaxLength(4000)
@@ -943,6 +978,10 @@ namespace SeOne.Migrations.Postgres.Migrations
 
                     b.Property<TimeSpan>("EndTime")
                         .HasColumnType("time");
+
+                    b.Property<decimal>("FinalPrice")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
 
                     b.Property<string>("Level")
                         .IsRequired()
@@ -972,7 +1011,7 @@ namespace SeOne.Migrations.Postgres.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
 
-                    b.Property<Guid>("TeacherId")
+                    b.Property<Guid?>("TeacherId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("TimeZone")
@@ -2532,6 +2571,25 @@ namespace SeOne.Migrations.Postgres.Migrations
                     b.Navigation("CreatedBy");
                 });
 
+            modelBuilder.Entity("SeOne.Domain.Entities.ClassSlotTeacherAssignment", b =>
+                {
+                    b.HasOne("SeOne.Domain.Entities.CourseClass", "ClassSlot")
+                        .WithMany("TeacherAssignments")
+                        .HasForeignKey("ClassSlotId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("SeOne.Domain.Entities.User", "Teacher")
+                        .WithMany()
+                        .HasForeignKey("TeacherId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("ClassSlot");
+
+                    b.Navigation("Teacher");
+                });
+
             modelBuilder.Entity("SeOne.Domain.Entities.ClassroomAttendance", b =>
                 {
                     b.HasOne("SeOne.Domain.Entities.ClassroomSession", "Session")
@@ -2636,8 +2694,7 @@ namespace SeOne.Migrations.Postgres.Migrations
                     b.HasOne("SeOne.Domain.Entities.User", "Teacher")
                         .WithMany()
                         .HasForeignKey("TeacherId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("Course");
 
@@ -3065,6 +3122,8 @@ namespace SeOne.Migrations.Postgres.Migrations
                     b.Navigation("Enrollments");
 
                     b.Navigation("Invites");
+
+                    b.Navigation("TeacherAssignments");
                 });
 
             modelBuilder.Entity("SeOne.Domain.Entities.CourseInstance", b =>

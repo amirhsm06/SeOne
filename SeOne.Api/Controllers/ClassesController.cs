@@ -47,7 +47,7 @@ public sealed class ClassesController : ApiControllerBase
             .AsNoTracking()
             .Include(x => x.Teacher)
             .Include(x => x.Course)
-            .Where(classItem => classItem.Status == "scheduled");
+            .Where(classItem => classItem.Status == "scheduled" && classItem.TeacherId.HasValue);
 
         if (teacherId.HasValue)
             query = query.Where(classItem => classItem.TeacherId == teacherId.Value);
@@ -89,7 +89,7 @@ public sealed class ClassesController : ApiControllerBase
         var enrollmentDict = enrollmentCounts.ToDictionary(x => x.ClassId, x => x.Count);
 
         // Get teacher profiles for avatars/ratings
-        var teacherIds = classesWithData.Select(x => x.TeacherId).Distinct().ToList();
+        var teacherIds = classesWithData.Select(x => x.TeacherId!.Value).Distinct().ToList();
         var teacherProfiles = await _db.Set<TeacherProfile>()
             .AsNoTracking()
             .Where(x => teacherIds.Contains(x.TeacherId))
@@ -107,7 +107,7 @@ public sealed class ClassesController : ApiControllerBase
         var items = classesWithData.Select(classItem =>
         {
             var currentEnrollment = enrollmentDict.TryGetValue(classItem.Id, out var count) ? count : 0;
-            teacherProfiles.TryGetValue(classItem.TeacherId, out var profile);
+            teacherProfiles.TryGetValue(classItem.TeacherId!.Value, out var profile);
 
             return new CourseClassDto
             {
@@ -121,7 +121,7 @@ public sealed class ClassesController : ApiControllerBase
                 CurrentEnrollment = currentEnrollment,
                 RemainingCapacity = Math.Max(0, classItem.MaxCapacity - currentEnrollment),
                 BasePrice = classItem.BasePrice,
-                FinalPrice = GetFinalPrice(classItem, currentEnrollment),
+                FinalPrice = GetFinalPrice(classItem),
                 ScheduledDate = DateTime.SpecifyKind(classItem.ScheduledDate.Date + classItem.StartTime, DateTimeKind.Utc),
                 StartTime = classItem.StartTime.ToString(@"hh\:mm", CultureInfo.InvariantCulture),
                 EndTime = classItem.EndTime.ToString(@"hh\:mm", CultureInfo.InvariantCulture),
@@ -129,7 +129,7 @@ public sealed class ClassesController : ApiControllerBase
                 Status = classItem.Status,
                 Teacher = new ClassTeacherDto
                 {
-                    Id = classItem.TeacherId,
+                    Id = classItem.TeacherId!.Value,
                     Name = classItem.Teacher.FullName,
                     Avatar = profile?.Avatar ?? classItem.Teacher.AvatarUrl,
                     Rating = profile?.Rating ?? 0
@@ -202,6 +202,8 @@ public sealed class ClassesController : ApiControllerBase
             Type = request.Type.ToLowerInvariant(),
             MaxCapacity = request.MaxCapacity,
             BasePrice = request.BasePrice ?? course.Price,
+            FinalPrice = request.BasePrice ?? course.Price,
+            Currency = course.Currency,
             ScheduledDate = request.ScheduledDate.Date,
             StartTime = startTime,
             EndTime = endTime,
@@ -212,6 +214,14 @@ public sealed class ClassesController : ApiControllerBase
         };
 
         _db.Add(classItem);
+        _db.Add(new ClassSlotTeacherAssignment
+        {
+            Id = Guid.NewGuid(),
+            ClassSlotId = classItem.Id,
+            TeacherId = teacherId,
+            Status = "confirmed",
+            CreatedAt = DateTime.UtcNow
+        });
         await _db.SaveChangesAsync(cancellationToken);
         return CreatedAtAction(nameof(GetClass), new { classId = classItem.Id }, new { id = classItem.Id });
     }
@@ -247,8 +257,10 @@ public sealed class ClassesController : ApiControllerBase
         if (request?.InvitedByStudentId is Guid requestedInviter && requestedInviter != invitedByStudentId)
             return BadRequest(new { message = "invitedByStudentId must match the invite code owner." });
 
-        var discountPercent = classItem.Type == "private" && currentEnrollment >= 1 ? 30m : 0m;
-        var finalPrice = Math.Round(classItem.BasePrice * (1m - discountPercent / 100m), 2, MidpointRounding.AwayFromZero);
+        var finalPrice = classItem.FinalPrice;
+        var discountPercent = classItem.BasePrice <= 0
+            ? 0m
+            : Math.Clamp(Math.Round((1m - finalPrice / classItem.BasePrice) * 100m, 2, MidpointRounding.AwayFromZero), 0m, 100m);
         var enrollment = new ClassEnrollment
         {
             Id = existing?.Id ?? Guid.NewGuid(),
@@ -317,7 +329,10 @@ public sealed class ClassesController : ApiControllerBase
         if (!User.IsInRole("Admin") && classItem.TeacherId != RequireUserId())
             return Forbid();
 
-        var hasConflict = await HasScheduleConflictAsync(classItem.TeacherId, classItem.ScheduledDate, classItem.StartTime, classItem.EndTime, classItem.Id, cancellationToken);
+        if (classItem.TeacherId is not Guid teacherId)
+            return Conflict(new { message = "This class slot has no assigned teacher." });
+
+        var hasConflict = await HasScheduleConflictAsync(teacherId, classItem.ScheduledDate, classItem.StartTime, classItem.EndTime, classItem.Id, cancellationToken);
         return Ok(new { hasConflict });
     }
 
@@ -327,12 +342,12 @@ public sealed class ClassesController : ApiControllerBase
             .AsNoTracking()
             .Include(item => item.Teacher)
             .Include(item => item.Course)
-            .FirstOrDefaultAsync(item => item.Id == classId && item.Status == "scheduled", cancellationToken);
+            .FirstOrDefaultAsync(item => item.Id == classId && item.Status == "scheduled" && item.TeacherId.HasValue, cancellationToken);
         if (classItem is null)
             return NotFound();
 
         var count = await _db.Set<ClassEnrollment>().CountAsync(enrollment => enrollment.ClassId == classId && enrollment.Status != "cancelled", cancellationToken);
-        var profile = await _db.Set<TeacherProfile>().AsNoTracking().FirstOrDefaultAsync(item => item.TeacherId == classItem.TeacherId, cancellationToken);
+        var profile = await _db.Set<TeacherProfile>().AsNoTracking().FirstOrDefaultAsync(item => item.TeacherId == classItem.TeacherId!.Value, cancellationToken);
         return Ok(new CourseClassDto
         {
             Id = classItem.Id,
@@ -345,13 +360,13 @@ public sealed class ClassesController : ApiControllerBase
             CurrentEnrollment = count,
             RemainingCapacity = Math.Max(0, classItem.MaxCapacity - count),
             BasePrice = classItem.BasePrice,
-            FinalPrice = GetFinalPrice(classItem, count),
+            FinalPrice = GetFinalPrice(classItem),
             ScheduledDate = DateTime.SpecifyKind(classItem.ScheduledDate.Date + classItem.StartTime, DateTimeKind.Utc),
             StartTime = classItem.StartTime.ToString(@"hh\:mm", CultureInfo.InvariantCulture),
             EndTime = classItem.EndTime.ToString(@"hh\:mm", CultureInfo.InvariantCulture),
             TimeZone = classItem.TimeZone,
             Status = classItem.Status,
-            Teacher = new ClassTeacherDto { Id = classItem.TeacherId, Name = classItem.Teacher.FullName, Avatar = profile?.Avatar ?? classItem.Teacher.AvatarUrl, Rating = profile?.Rating ?? 0m },
+            Teacher = new ClassTeacherDto { Id = classItem.TeacherId!.Value, Name = classItem.Teacher!.FullName, Avatar = profile?.Avatar ?? classItem.Teacher.AvatarUrl, Rating = profile?.Rating ?? 0m },
             Course = new ClassCourseDto { Id = classItem.CourseId, Title = classItem.Course.Title, ImageUrl = classItem.Course.ImageUrl }
         });
     }
@@ -390,10 +405,7 @@ public sealed class ClassesController : ApiControllerBase
         cancelledAt = enrollment.CancelledAt
     };
 
-    private static decimal GetFinalPrice(CourseClass classItem, int currentEnrollment) =>
-        classItem.Type == "private" && currentEnrollment >= 1
-            ? Math.Round(classItem.BasePrice * 0.70m, 2, MidpointRounding.AwayFromZero)
-            : classItem.BasePrice;
+    private static decimal GetFinalPrice(CourseClass classItem) => classItem.FinalPrice;
 
     private static bool TryParseTimes(string? startValue, string? endValue, out TimeSpan startTime, out TimeSpan endTime)
     {

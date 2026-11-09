@@ -4,7 +4,7 @@ public sealed class CourseClass
 {
     public Guid Id { get; set; }
     public Guid CourseId { get; set; }
-    public Guid TeacherId { get; set; }
+    public Guid? TeacherId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public string Level { get; set; } = string.Empty;
@@ -12,6 +12,8 @@ public sealed class CourseClass
     public string Type { get; set; } = "public";
     public int MaxCapacity { get; set; }
     public decimal BasePrice { get; set; }
+    public decimal FinalPrice { get; set; }
+    public string Currency { get; set; } = "IRR";
     public DateTime ScheduledDate { get; set; }
     public TimeSpan StartTime { get; set; }
     public TimeSpan EndTime { get; set; }
@@ -21,7 +23,8 @@ public sealed class CourseClass
     public DateTime CreatedAt { get; set; }
 
     public Course Course { get; set; } = null!;
-    public User Teacher { get; set; } = null!;
+    public User? Teacher { get; set; }
+    public ICollection<ClassSlotTeacherAssignment> TeacherAssignments { get; set; } = new List<ClassSlotTeacherAssignment>();
     public ICollection<ClassEnrollment> Enrollments { get; set; } = new List<ClassEnrollment>();
     public ICollection<ClassInvite> Invites { get; set; } = new List<ClassInvite>();
 }

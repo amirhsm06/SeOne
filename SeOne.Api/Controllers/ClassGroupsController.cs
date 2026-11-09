@@ -31,12 +31,12 @@ public sealed class ClassGroupsController : ControllerBase
             .SingleOrDefaultAsync(x => x.Id == group.ClassId, cancellationToken);
 
         string teacherName = "Unassigned teacher";
-        if (courseClass is not null)
+        if (courseClass?.TeacherId is Guid teacherId)
         {
             // CourseClass.TeacherId is the assigned Identity User.Id.
             var teacherUser = await _db.Users.AsNoTracking()
                 .SingleOrDefaultAsync(
-                    x => x.Id == courseClass.TeacherId,
+                    x => x.Id == teacherId,
                     cancellationToken);
             teacherName = GetDisplayName(teacherUser);
         }

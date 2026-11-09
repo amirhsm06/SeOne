@@ -18,6 +18,8 @@ public sealed class CourseClassConfiguration : IEntityTypeConfiguration<CourseCl
         builder.Property(classItem => classItem.Status).HasMaxLength(20).IsRequired();
         builder.Property(classItem => classItem.MaxCapacity).IsRequired();
         builder.Property(classItem => classItem.BasePrice).HasPrecision(18, 2).IsRequired();
+        builder.Property(classItem => classItem.FinalPrice).HasPrecision(18, 2).IsRequired();
+        builder.Property(classItem => classItem.Currency).HasMaxLength(3).IsRequired();
         builder.Property(classItem => classItem.ScheduledDate).HasColumnType("date").IsRequired();
         builder.Property(classItem => classItem.StartTime).HasColumnType("time").IsRequired();
         builder.Property(classItem => classItem.EndTime).HasColumnType("time").IsRequired();

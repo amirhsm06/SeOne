@@ -361,7 +361,7 @@ public class PaymentService : IPaymentService
             CourseId = enrollment.CourseClass.CourseId,  // Link to class's course
             ClassEnrollmentId = classEnrollmentId,
             Amount = enrollment.FinalPrice,
-            Currency = "USD",
+            Currency = enrollment.CourseClass.Currency,
             Status = PaymentStatus.Pending,
             CreatedAt = DateTime.UtcNow,
             Provider = "Manual"

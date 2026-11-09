@@ -2,3 +2,4 @@
 
 ## Project Guidelines
 - The user wants changes only in the backend repository H:\SeOne. The H:\Se_One-authoritative frontend was shared only for visual context; the user cannot edit/deploy that frontend because a friend handles frontend changes. Do not modify the frontend repo; make backend/API contract changes that the frontend developer can consume.
+- For this SeOne backend work, generate and maintain PostgreSQL migrations only; SQL Server migrations are not needed. The PostgreSQL database connection is already configured in an environment variable, so use that existing configuration.

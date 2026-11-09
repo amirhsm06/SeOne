@@ -75,6 +75,8 @@ public class SeOneDbContext
 
     public DbSet<ClassEnrollment> ClassEnrollments { get; set; }
 
+    public DbSet<ClassSlotTeacherAssignment> ClassSlotTeacherAssignments { get; set; }
+
     public DbSet<ClassInvite> ClassInvites { get; set; }
 
     public DbSet<ManualPaymentSettings> ManualPaymentSettings { get; set; }

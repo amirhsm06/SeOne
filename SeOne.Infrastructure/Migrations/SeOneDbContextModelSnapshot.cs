@@ -335,7 +335,7 @@ namespace SeOne.Infrastructure.Migrations
 
                     b.HasIndex("Language");
 
-                    b.ToTable("BlogPosts");
+                    b.ToTable("BlogPosts", (string)null);
                 });
 
             modelBuilder.Entity("SeOne.Domain.Entities.Booking", b =>
@@ -373,7 +373,7 @@ namespace SeOne.Infrastructure.Migrations
 
                     b.HasIndex("TeacherId", "StartTime");
 
-                    b.ToTable("Bookings");
+                    b.ToTable("Bookings", (string)null);
                 });
 
             modelBuilder.Entity("SeOne.Domain.Entities.Conversation", b =>
@@ -515,7 +515,7 @@ namespace SeOne.Infrastructure.Migrations
 
                     b.HasIndex("TeacherId");
 
-                    b.ToTable("Course");
+                    b.ToTable("Course", (string)null);
                 });
 
             modelBuilder.Entity("SeOne.Domain.Entities.CourseModule", b =>

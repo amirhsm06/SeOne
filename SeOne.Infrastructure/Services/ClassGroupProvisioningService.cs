@@ -79,13 +79,15 @@ public sealed class ClassGroupProvisioningService : IClassGroupProvisioningServi
 
         // CourseClass.TeacherId is the Identity User.Id for the assigned teacher.
         // SeOne stores teacher approval state on User.AccountStatus.
-        var teacher = await _db.Users
-            .AsNoTracking()
-            .SingleOrDefaultAsync(
-                x => x.Id == courseClass.TeacherId
-                     && x.Role == UserRole.Teacher
-                     && x.AccountStatus == "active",
-                cancellationToken);
+        var teacher = courseClass.TeacherId.HasValue
+            ? await _db.Users
+                .AsNoTracking()
+                .SingleOrDefaultAsync(
+                    x => x.Id == courseClass.TeacherId.Value
+                         && x.Role == UserRole.Teacher
+                         && x.AccountStatus == "active",
+                    cancellationToken)
+            : null;
 
         if (teacher is not null)
             desiredMembers[teacher.Id] = "Teacher";
