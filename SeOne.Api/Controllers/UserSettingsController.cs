@@ -1,4 +1,4 @@
-﻿using System.Security.Cryptography;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using SeOne.Domain.Entities;
 using SeOne.Infrastructure.Persistence;
 using SeOne.Application.Interfaces;
+using SeOne.Infrastructure.Authentication;
 
 namespace SeOne.Api.Controllers;
 
@@ -189,40 +190,72 @@ public class UserSettingsController : ApiControllerBase
     public async Task<IActionResult> TwoFactorStatus()
     {
         var user = await CurrentUserAsync(); if (user is null) return NotFound();
-        return Ok(new { enabled = !string.IsNullOrWhiteSpace(user.TwoFactorMethod), method = user.TwoFactorMethod ?? "app", phoneNumber = user.PhoneNumber, email = user.Email });
+        return Ok(new { enabled = user.TwoFactorEnabled, method = user.TwoFactorMethod ?? "app", phoneNumber = user.PhoneNumber, email = user.Email });
     }
 
     [HttpPost("2fa/enable")]
     public async Task<IActionResult> EnableTwoFactor([FromBody] EnableTwoFactorRequest request)
     {
         var method = request.Method?.Trim().ToLowerInvariant();
-        if (method is not ("sms" or "app" or "email")) return BadRequest(new { message = "Method must be sms, app, or email." });
-        var user = await CurrentUserAsync(); if (user is null) return NotFound();
-        user.TwoFactorMethod = method;
+        if (method != "app")
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = "Only authenticator-app 2FA is available. SMS and email delivery are not configured." });
+
+        var user = await CurrentUserAsync();
+        if (user is null) return NotFound();
+        if (user.TwoFactorEnabled)
+            return Conflict(new { message = "Two-factor authentication is already enabled. Disable it before starting a new authenticator setup." });
+
         var codes = Enumerable.Range(0, 8).Select(_ => GenerateCode(10)).ToArray();
-        string? secret = method == "app" ? GenerateBase32Secret(20) : null;
-        user.TwoFactorBackupCodesJson = JsonSerializer.Serialize(new TwoFactorData { Secret = secret, Codes = codes });
-        user.UpdatedAt = DateTime.UtcNow;
-        await _users.UpdateAsync(user);
-        if (method == "app")
+        var secret = GenerateBase32Secret(20);
+        user.TwoFactorMethod = "app";
+        user.TwoFactorEnabled = false;
+        user.TwoFactorBackupCodesJson = JsonSerializer.Serialize(new TwoFactorData
         {
-            var issuer = Uri.EscapeDataString("SeOne");
-            var label = Uri.EscapeDataString(user.Email ?? user.UserName ?? user.Id.ToString());
-            var otpUri = $"otpauth://totp/{issuer}:{label}?secret={secret}&issuer={issuer}&digits=6&period=30";
-            return Ok(new { secret, qrCodeUrl = otpUri, backupCodes = codes });
-        }
-        return Ok(new { backupCodes = codes });
+            Secret = secret,
+            Codes = codes.Select(TwoFactorCodeVerifier.HashBackupCode).ToArray()
+        });
+        user.UpdatedAt = DateTime.UtcNow;
+
+        var update = await _users.UpdateAsync(user);
+        if (!update.Succeeded)
+            return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Could not save two-factor setup." });
+
+        var issuer = Uri.EscapeDataString("SeOne");
+        var label = Uri.EscapeDataString(user.Email ?? user.UserName ?? user.Id.ToString());
+        var otpUri = $"otpauth://totp/{issuer}:{label}?secret={secret}&issuer={issuer}&digits=6&period=30";
+        return Ok(new { secret, qrCodeUrl = otpUri, backupCodes = codes });
     }
 
     [HttpPost("2fa/verify")]
     public async Task<IActionResult> VerifyTwoFactor([FromBody] VerifyTwoFactorRequest request)
     {
         var user = await CurrentUserAsync(); if (user is null) return NotFound();
-        if (string.IsNullOrWhiteSpace(user.TwoFactorMethod)) return BadRequest(new { message = "Two-factor authentication is not enabled." });
+        if (!string.Equals(user.TwoFactorMethod, "app", StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { message = "Authenticator-app setup is not pending." });
+
         var code = request.Code?.Trim() ?? string.Empty;
         var data = ReadTwoFactorData(user);
-        if (data.Codes.Contains(code, StringComparer.OrdinalIgnoreCase)) return Ok(new { verified = true });
-        return user.TwoFactorMethod == "app" && VerifyTotpAgainstSecret(code, data.Secret) ? Ok(new { verified = true }) : BadRequest(new { message = "Invalid verification code." });
+        if (TwoFactorCodeVerifier.VerifyTotp(code, data.Secret))
+        {
+            user.TwoFactorEnabled = true;
+            user.UpdatedAt = DateTime.UtcNow;
+            var update = await _users.UpdateAsync(user);
+            if (!update.Succeeded)
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Could not activate two-factor authentication." });
+            return Ok(new { verified = true, enabled = true });
+        }
+
+        // Once enabled, a backup code is accepted here but consumed exactly once.
+        if (user.TwoFactorEnabled && TwoFactorCodeVerifier.TryConsumeBackupCode(user, code))
+        {
+            user.UpdatedAt = DateTime.UtcNow;
+            var update = await _users.UpdateAsync(user);
+            if (!update.Succeeded)
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Could not update backup-code state." });
+            return Ok(new { verified = true, enabled = true });
+        }
+
+        return BadRequest(new { message = "Invalid verification code." });
     }
 
     [HttpPost("2fa/disable")]
@@ -231,7 +264,12 @@ public class UserSettingsController : ApiControllerBase
         var user = await CurrentUserAsync(); if (user is null) return NotFound();
         var check = await _users.CheckPasswordAsync(user, request.Password ?? string.Empty);
         if (!check) return Unauthorized();
-        user.TwoFactorMethod = null; user.TwoFactorBackupCodesJson = null; user.UpdatedAt = DateTime.UtcNow; await _users.UpdateAsync(user); return NoContent();
+        user.TwoFactorEnabled = false;
+        user.TwoFactorMethod = null;
+        user.TwoFactorBackupCodesJson = null;
+        user.UpdatedAt = DateTime.UtcNow;
+        await _users.UpdateAsync(user);
+        return NoContent();
     }
 
     [HttpPost("2fa/backup/regenerate")]
@@ -239,7 +277,18 @@ public class UserSettingsController : ApiControllerBase
     {
         var user = await CurrentUserAsync(); if (user is null) return NotFound();
         if (!await _users.CheckPasswordAsync(user, request.Password ?? string.Empty)) return Unauthorized();
-        var data = ReadTwoFactorData(user); var codes = Enumerable.Range(0, 8).Select(_ => GenerateCode(10)).ToArray(); data.Codes = codes; user.TwoFactorBackupCodesJson = JsonSerializer.Serialize(data); user.UpdatedAt = DateTime.UtcNow; await _users.UpdateAsync(user); return Ok(new { backupCodes = codes });
+        if (!user.TwoFactorEnabled || !string.Equals(user.TwoFactorMethod, "app", StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { message = "Authenticator-app 2FA must be enabled before regenerating backup codes." });
+
+        var data = ReadTwoFactorData(user);
+        var codes = Enumerable.Range(0, 8).Select(_ => GenerateCode(10)).ToArray();
+        data.Codes = codes.Select(TwoFactorCodeVerifier.HashBackupCode).ToArray();
+        user.TwoFactorBackupCodesJson = JsonSerializer.Serialize(data);
+        user.UpdatedAt = DateTime.UtcNow;
+        var update = await _users.UpdateAsync(user);
+        if (!update.Succeeded)
+            return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Could not save the regenerated backup codes." });
+        return Ok(new { backupCodes = codes });
     }
 
     [HttpGet("notifications/preferences")]
@@ -384,32 +433,6 @@ public class UserSettingsController : ApiControllerBase
     private static void MergeJson(Dictionary<string, object?> target, JsonElement element) { if (element.ValueKind != JsonValueKind.Object) return; foreach (var p in element.EnumerateObject()) { if (p.Value.ValueKind == JsonValueKind.Object) { var child = target.TryGetValue(p.Name, out var o) && o is JsonElement je && je.ValueKind == JsonValueKind.Object ? JsonSerializer.Deserialize<Dictionary<string, object?>>(je.GetRawText())! : new(); MergeJson(child, p.Value); target[p.Name] = child; } else target[p.Name] = JsonSerializer.Deserialize<object?>(p.Value.GetRawText()); } }
     private static string GenerateCode(int length) => Convert.ToHexString(RandomNumberGenerator.GetBytes((length + 1) / 2)).ToLowerInvariant()[..length];
     private static string GenerateBase32Secret(int bytes) { const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"; var data = RandomNumberGenerator.GetBytes(bytes); var sb = new StringBuilder(); var buffer = 0; var bits = 0; foreach (var b in data) { buffer = (buffer << 8) | b; bits += 8; while (bits >= 5) { bits -= 5; sb.Append(alphabet[(buffer >> bits) & 31]); } } if (bits > 0) sb.Append(alphabet[(buffer << (5 - bits)) & 31]); return sb.ToString(); }
-    private static bool VerifyTotpAgainstSecret(string code, string? secret)
-    {
-        if (string.IsNullOrWhiteSpace(secret) || code.Length != 6 || !code.All(char.IsDigit)) return false;
-        byte[] secretBytes;
-        try { secretBytes = Base32Decode(secret); } catch { return false; }
-        var unix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        for (long offset = -1; offset <= 1; offset++)
-        {
-            var counter = (unix / 30) + offset;
-            var counterBytes = BitConverter.GetBytes(counter);
-            if (BitConverter.IsLittleEndian) Array.Reverse(counterBytes);
-            using var hmac = new HMACSHA1(secretBytes);
-            var hash = hmac.ComputeHash(counterBytes);
-            var index = hash[^1] & 0x0f;
-            var binary = ((hash[index] & 0x7f) << 24) | (hash[index + 1] << 16) | (hash[index + 2] << 8) | hash[index + 3];
-            if ((binary % 1_000_000).ToString("D6") == code) return true;
-        }
-        return false;
-    }
-    private static byte[] Base32Decode(string input)
-    {
-        const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-        var clean = input.Trim().TrimEnd('='); var output = new List<byte>(); var buffer = 0; var bits = 0;
-        foreach (var ch in clean) { var val = alphabet.IndexOf(char.ToUpperInvariant(ch)); if (val < 0) throw new FormatException(); buffer = (buffer << 5) | val; bits += 5; if (bits >= 8) { bits -= 8; output.Add((byte)((buffer >> bits) & 255)); } }
-        return output.ToArray();
-    }
     private sealed class TwoFactorData { public string? Secret { get; set; } public string[] Codes { get; set; } = Array.Empty<string>(); }
 }
 

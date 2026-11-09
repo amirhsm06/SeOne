@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 using SeOne.Application.DTOs;
 using SeOne.Application.Interfaces;
 using SeOne.Domain.Entities;
+using SeOne.Application.Exceptions;
 
 namespace SeOne.Api.Controllers;
 
@@ -14,13 +15,19 @@ public class AuthController : ControllerBase
 {
     private readonly IAuthService _authService;
     private readonly UserManager<User> _userManager;
+    private readonly IOtpSender _otpSender;
+    private readonly IEmailSender _emailSender;
 
     public AuthController(
         IAuthService authService,
-        UserManager<User> userManager)
+        UserManager<User> userManager,
+        IOtpSender otpSender,
+        IEmailSender emailSender)
     {
         _authService = authService;
         _userManager = userManager;
+        _otpSender = otpSender;
+        _emailSender = emailSender;
     }
 
     [HttpPost("register")]
@@ -34,7 +41,9 @@ public class AuthController : ControllerBase
                 request.FamilyName,
                 request.Email,
                 request.Password,
-                request.Role);
+                request.Role,
+                request.DateOfBirth,
+                request.ParentalConsent);
 
             return Ok(result);
         }
@@ -51,15 +60,35 @@ public class AuthController : ControllerBase
     public async Task<ActionResult<AuthResponseDto>> Login(
         [FromBody] LoginRequest request)
     {
+        var twoFactorCode = request.TwoFactorCode ?? request.Code;
         var result = await _authService.LoginAsync(
             request.Email,
-            request.Password);
+            request.Password,
+            twoFactorCode);
 
         if (result is null)
         {
+            var email = request.Email?.Trim();
+            var candidate = string.IsNullOrWhiteSpace(email)
+                ? null
+                : await _userManager.FindByEmailAsync(email);
+            if (candidate is not null &&
+                string.Equals(candidate.AccountStatus, "active", StringComparison.OrdinalIgnoreCase) &&
+                await _userManager.CheckPasswordAsync(candidate, request.Password ?? string.Empty) &&
+                candidate.TwoFactorEnabled &&
+                string.IsNullOrWhiteSpace(twoFactorCode))
+            {
+                return Unauthorized(new
+                {
+                    message = "A two-factor authentication code is required.",
+                    requiresTwoFactor = true,
+                    method = candidate.TwoFactorMethod
+                });
+            }
+
             return Unauthorized(new
             {
-                message = "Invalid email or password."
+                message = "Invalid email, password, or two-factor code."
             });
         }
 
@@ -109,8 +138,19 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> RequestOtp(
         [FromBody] RequestOtpRequest request)
     {
-        var result = await _authService.RequestOtpAsync(
-            request.Phone);
+        if (!_otpSender.IsConfigured)
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = "SMS verification is not configured yet." });
+
+        bool result;
+        try
+        {
+            result = await _authService.RequestOtpAsync(request.Phone);
+        }
+        catch (DeliveryNotConfiguredException)
+        {
+            // Keep the response generic to avoid disclosing whether a phone number belongs to an account.
+            return NoContent();
+        }
 
         if (!result)
         {
@@ -146,20 +186,19 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> ForgotPassword(
         [FromBody] ForgotPasswordRequest request)
     {
+        // Return the same configuration status for all addresses; do not query the account first.
+        if (!_emailSender.IsConfigured)
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = "Password-reset email delivery is not configured yet." });
+
         try
         {
             await _authService.ForgotPasswordAsync(request.Email);
         }
-        catch (SeOne.Application.Exceptions.DeliveryNotConfiguredException)
+        catch (DeliveryNotConfiguredException)
         {
-            // The sender logs a generic configuration warning without secrets.
-            // Keep this response generic to prevent account enumeration.
+            // A misconfigured provider must not reveal whether the account exists.
         }
 
-        /*
-         * Always return 204 so the API does not reveal
-         * whether the email belongs to an existing account.
-         */
         return NoContent();
     }
 }
@@ -175,6 +214,10 @@ public class RegisterRequest
     public string Password { get; set; } = string.Empty;
 
     public string Role { get; set; } = string.Empty;
+
+    public DateTime? DateOfBirth { get; set; }
+
+    public bool? ParentalConsent { get; set; }
 }
 
 public class LoginRequest
@@ -182,6 +225,11 @@ public class LoginRequest
     public string Email { get; set; } = string.Empty;
 
     public string Password { get; set; } = string.Empty;
+
+    public string? TwoFactorCode { get; set; }
+
+    // Alias accepted for clients that call the second factor simply "code".
+    public string? Code { get; set; }
 }
 
 public class RequestOtpRequest

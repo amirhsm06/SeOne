@@ -24,11 +24,16 @@ public class BlogController : ControllerBase
         return Ok(list);
     }
 
-    [HttpGet("{id:guid}")]
+    [HttpGet("{idOrSlug}")]
     [AllowAnonymous]
-    public async Task<ActionResult<BlogPostDto>> GetById(Guid id)
+    public async Task<ActionResult<BlogPostDto>> GetByIdOrSlug(
+        string idOrSlug,
+        [FromQuery(Name = "lang")] string lang = "en")
     {
-        var dto = await _blogService.GetPublishedPostByIdAsync(id);
+        var dto = Guid.TryParse(idOrSlug, out var id)
+            ? await _blogService.GetPublishedPostByIdAsync(id)
+            : await _blogService.GetPublishedPostBySlugAsync(idOrSlug, lang);
+
         if (dto is null) return NotFound();
         return Ok(dto);
     }

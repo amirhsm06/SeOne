@@ -1,4 +1,4 @@
-﻿using System.Security.Claims;
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
@@ -145,32 +145,6 @@ public class StudentAssignmentsController : ControllerBase
         result = await _assignmentService.FinalizeSubmissionAsync(
             studentId,
             existingSubmission.Id,
-            request,
-            cancellationToken);
-
-        return MapCompletionResult(result);
-    }
-
-    [HttpPost("~/api/student/submissions/{submissionId:guid}/submit")]
-    public async Task<IActionResult> FinalizeSubmission(
-        Guid submissionId,
-        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] CreateSubmissionRequest? request,
-        CancellationToken cancellationToken)
-    {
-        var studentId = GetUserId();
-        var submission = await _assignmentService.GetStudentSubmissionAsync(studentId, submissionId);
-        if (submission is null)
-            return NotFound(new { message = "Submission was not found." });
-
-        request ??= new CreateSubmissionRequest
-        {
-            Content = submission.Content,
-            Attachments = submission.Attachments
-        };
-
-        var result = await _assignmentService.FinalizeSubmissionAsync(
-            studentId,
-            submissionId,
             request,
             cancellationToken);
 

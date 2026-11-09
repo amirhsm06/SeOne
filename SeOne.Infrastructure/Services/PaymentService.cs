@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using SeOne.Application.DTOs;
 using SeOne.Application.Interfaces;
 using SeOne.Domain.Entities;
@@ -27,6 +27,9 @@ public class PaymentService : IPaymentService
         Guid studentId,
         Guid courseId)
     {
+        if (!_paymentGateway.IsConfigured)
+            throw new InvalidOperationException("Payment processing is not configured. No payment was created.");
+
         var course = await _context.Set<Course>()
             .FirstOrDefaultAsync(x =>
                 x.Id == courseId &&
@@ -126,6 +129,9 @@ public class PaymentService : IPaymentService
         Guid paymentId,
         string clientSecret)
     {
+        if (!_paymentGateway.IsConfigured)
+            throw new InvalidOperationException("Payment processing is not configured. No payment can be confirmed.");
+
         if (string.IsNullOrWhiteSpace(clientSecret))
         {
             return null;
@@ -311,7 +317,7 @@ public class PaymentService : IPaymentService
         };
     }
 
-    public async Task<ReceiptUploadResponse?> UploadReceiptAsync(
+    public Task<ReceiptUploadResponse?> UploadReceiptAsync(
         Guid studentId,
         Guid classEnrollmentId,
         string fileName,
@@ -319,75 +325,11 @@ public class PaymentService : IPaymentService
         Stream fileStream,
         string note)
     {
-        var enrollment = await _context.Set<ClassEnrollment>()
-            .Include(x => x.CourseClass)
-            .FirstOrDefaultAsync(x =>
-                x.Id == classEnrollmentId &&
-                x.StudentId == studentId);
-
-        if (enrollment is null)
-        {
-            throw new ArgumentException("Class enrollment not found or unauthorized.");
-        }
-
-        var settings = await _context.Set<ManualPaymentSettings>()
-            .FirstOrDefaultAsync();
-
-        if (settings == null || !settings.IsEnabled)
-        {
-            throw new ArgumentException("Manual payments are not enabled.");
-        }
-
-        // Validate file size
-        if (fileStream.Length > settings.MaxReceiptSizeBytes)
-        {
-            throw new ArgumentException(
-                $"Receipt file exceeds maximum size of {settings.MaxReceiptSizeBytes} bytes.");
-        }
-
-        // Validate MIME type
-        var allowedTypes = settings.AllowedMimeTypes.Split(',');
-        if (!allowedTypes.Contains(mimeType))
-        {
-            throw new ArgumentException(
-                $"File type '{mimeType}' is not allowed.");
-        }
-
-        // Create payment record with receipt
-        var payment = new Payment
-        {
-            Id = Guid.NewGuid(),
-            StudentId = studentId,
-            CourseId = enrollment.CourseClass.CourseId,  // Link to class's course
-            ClassEnrollmentId = classEnrollmentId,
-            Amount = enrollment.FinalPrice,
-            Currency = enrollment.CourseClass.Currency,
-            Status = PaymentStatus.Pending,
-            CreatedAt = DateTime.UtcNow,
-            Provider = "Manual"
-        };
-
-        // Save file and store path
-        // Note: File storage would typically use IMessagingFileStorageService or similar
-        // For now, storing the file name as a placeholder
-        var storedFileName = $"receipts/{Guid.NewGuid()}_{fileName}";
-        payment.ReceiptObjectPath = storedFileName;
-
-        _context.Set<Payment>().Add(payment);
-        await _context.SaveChangesAsync();
-
-        return new ReceiptUploadResponse
-        {
-            PaymentId = payment.Id,
-            ClassEnrollmentId = classEnrollmentId,
-            ReceiptObjectPath = storedFileName,
-            Status = "pending",
-            UploadedAt = payment.CreatedAt,
-            Message = "Receipt uploaded successfully. Awaiting admin verification."
-        };
+        return Task.FromException<ReceiptUploadResponse?>(new InvalidOperationException(
+            "Manual receipt storage is not configured. The file was not accepted or stored."));
     }
 
-    public async Task<ReceiptUploadResponse?> UploadReceiptForPaymentAsync(
+    public Task<ReceiptUploadResponse?> UploadReceiptForPaymentAsync(
         Guid studentId,
         Guid paymentId,
         string fileName,
@@ -395,55 +337,8 @@ public class PaymentService : IPaymentService
         Stream fileStream,
         string note)
     {
-        var payment = await _context.Set<Payment>()
-            .FirstOrDefaultAsync(x =>
-                x.Id == paymentId &&
-                x.StudentId == studentId);
-
-        if (payment is null)
-        {
-            throw new ArgumentException("Payment not found or unauthorized.");
-        }
-
-        if (payment.Status != PaymentStatus.Pending || payment.ReceiptObjectPath is not null)
-        {
-            throw new ArgumentException("Payment is not eligible for receipt upload.");
-        }
-
-        var settings = await _context.Set<ManualPaymentSettings>()
-            .FirstOrDefaultAsync();
-
-        if (settings is null || !settings.IsEnabled)
-        {
-            throw new ArgumentException("Manual payments are not enabled.");
-        }
-
-        if (fileStream.Length > settings.MaxReceiptSizeBytes)
-        {
-            throw new ArgumentException(
-                $"Receipt file exceeds maximum size of {settings.MaxReceiptSizeBytes} bytes.");
-        }
-
-        var allowedTypes = settings.AllowedMimeTypes.Split(',');
-        if (!allowedTypes.Contains(mimeType))
-        {
-            throw new ArgumentException(
-                $"File type '{mimeType}' is not allowed.");
-        }
-
-        var storedFileName = $"receipts/{Guid.NewGuid()}_{fileName}";
-        payment.ReceiptObjectPath = storedFileName;
-        await _context.SaveChangesAsync();
-
-        return new ReceiptUploadResponse
-        {
-            PaymentId = payment.Id,
-            ClassEnrollmentId = payment.ClassEnrollmentId,
-            ReceiptObjectPath = storedFileName,
-            Status = "pending",
-            UploadedAt = payment.CreatedAt,
-            Message = "Receipt uploaded successfully. Awaiting admin verification."
-        };
+        return Task.FromException<ReceiptUploadResponse?>(new InvalidOperationException(
+            "Manual receipt storage is not configured. The file was not accepted or stored."));
     }
 
     public async Task<List<PendingReceiptDto>> GetPendingReceiptsAsync()

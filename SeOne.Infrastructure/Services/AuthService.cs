@@ -7,6 +7,7 @@ using SeOne.Application.Interfaces;
 using SeOne.Domain.Entities;
 using SeOne.Domain.Enums;
 using SeOne.Infrastructure.Persistence;
+using SeOne.Infrastructure.Authentication;
 
 namespace SeOne.Infrastructure.Services;
 
@@ -42,7 +43,9 @@ public class AuthService : IAuthService
         string familyName,
         string email,
         string password,
-        string role)
+        string role,
+        DateTime? dateOfBirth = null,
+        bool? parentalConsent = null)
     {
         if (!Enum.TryParse<UserRole>(role, true, out var userRole))
             throw new ArgumentException("Invalid role.");
@@ -61,6 +64,9 @@ public class AuthService : IAuthService
 
         if (string.IsNullOrWhiteSpace(password))
             throw new ArgumentException("Password is required.");
+
+        if (dateOfBirth.HasValue && dateOfBirth.Value.Date > DateTime.UtcNow.Date)
+            throw new ArgumentException("Date of birth cannot be in the future.");
 
         var normalizedEmail = email.Trim();
 
@@ -82,7 +88,9 @@ public class AuthService : IAuthService
             FirstName = normalizedFirstName,
             FamilyName = normalizedFamilyName,
             FullName = $"{normalizedFirstName} {normalizedFamilyName}",
-            Role = userRole
+            Role = userRole,
+            DateOfBirth = dateOfBirth?.Date,
+            ParentalConsent = parentalConsent
         };
 
         var result = await _userManager.CreateAsync(
@@ -103,7 +111,8 @@ public class AuthService : IAuthService
 
     public async Task<AuthResponseDto?> LoginAsync(
         string email,
-        string password)
+        string password,
+        string? twoFactorCode = null)
     {
         if (string.IsNullOrWhiteSpace(email) ||
             string.IsNullOrWhiteSpace(password))
@@ -126,6 +135,29 @@ public class AuthService : IAuthService
 
         if (!validPassword)
             return null;
+
+        if (user.TwoFactorEnabled)
+        {
+            if (!string.Equals(user.TwoFactorMethod, "app", StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(twoFactorCode))
+                return null;
+
+            var secret = ReadTwoFactorSecret(user.TwoFactorBackupCodesJson);
+            var validTotp = TwoFactorCodeVerifier.VerifyTotp(twoFactorCode.Trim(), secret);
+            var validBackupCode = validTotp
+                ? false
+                : TwoFactorCodeVerifier.TryConsumeBackupCode(user, twoFactorCode.Trim());
+
+            if (!validTotp && !validBackupCode)
+                return null;
+
+            if (validBackupCode)
+            {
+                var updateResult = await _userManager.UpdateAsync(user);
+                if (!updateResult.Succeeded)
+                    return null;
+            }
+        }
 
         return CreateAuthResponse(user);
     }
@@ -297,6 +329,31 @@ public class AuthService : IAuthService
             resetToken);
 
         return true;
+    }
+
+    private static string? ReadTwoFactorSecret(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
+                return null;
+
+            if (!document.RootElement.TryGetProperty("Secret", out var secret) &&
+                !document.RootElement.TryGetProperty("secret", out secret))
+                return null;
+
+            return secret.ValueKind == System.Text.Json.JsonValueKind.String
+                ? secret.GetString()
+                : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private AuthResponseDto CreateAuthResponse(User user)

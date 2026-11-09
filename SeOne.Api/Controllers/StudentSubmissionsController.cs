@@ -1,6 +1,7 @@
-﻿using System.Security.Claims;
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using SeOne.Application.DTOs;
 using SeOne.Application.Interfaces;
 
@@ -80,11 +81,22 @@ public class StudentSubmissionsController : ControllerBase
     [HttpPost("{submissionId:guid}/submit")]
     public async Task<IActionResult> FinalizeSubmission(
         Guid submissionId,
-        [FromBody] CreateSubmissionRequest request,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] CreateSubmissionRequest? request,
         CancellationToken cancellationToken)
     {
+        var studentId = GetUserId();
+        var submission = await _assignmentService.GetStudentSubmissionAsync(studentId, submissionId);
+        if (submission is null)
+            return NotFound(new { message = "Submission was not found." });
+
+        request ??= new CreateSubmissionRequest
+        {
+            Content = submission.Content,
+            Attachments = submission.Attachments
+        };
+
         var result = await _assignmentService.FinalizeSubmissionAsync(
-            GetUserId(),
+            studentId,
             submissionId,
             request,
             cancellationToken);

@@ -19,20 +19,17 @@ public class CompatibilityController : ApiControllerBase
     private readonly IEnrollmentService _enrollmentService;
     private readonly IProgressService _progressService;
     private readonly ITeacherAvailabilityService _availabilityService;
-    private readonly IBlogService _blogService;
 
     public CompatibilityController(
         SeOneDbContext db,
         IEnrollmentService enrollmentService,
         IProgressService progressService,
-        ITeacherAvailabilityService availabilityService,
-        IBlogService blogService)
+        ITeacherAvailabilityService availabilityService)
     {
         _db = db;
         _enrollmentService = enrollmentService;
         _progressService = progressService;
         _availabilityService = availabilityService;
-        _blogService = blogService;
     }
 
     // -----------------------------------------------------------------
@@ -672,32 +669,6 @@ public class CompatibilityController : ApiControllerBase
         var teacherId = RequireUserId();
         var ok = await _availabilityService.DeleteAsync(slotId, teacherId);
         return ok ? NoContent() : NotFound();
-    }
-
-    // -----------------------------------------------------------------
-    // Cambridge blog endpoint expected by the frontend.
-    // -----------------------------------------------------------------
-
-    [HttpGet("blog/cambridge")]
-    [AllowAnonymous]
-    public async Task<IActionResult> CambridgeBlog()
-    {
-        var posts = await _blogService.GetPublishedPostsAsync("en");
-        return Ok(new
-        {
-            posts = posts.Select(p => new
-            {
-                p.Id,
-                p.Title,
-                p.Excerpt,
-                p.Author,
-                date = p.CreatedAt,
-                p.ReadTime,
-                p.Category,
-                image = p.ImageUrl,
-                source = "cambridge"
-            })
-        });
     }
 
     private async Task<object> BuildModuleResponseAsync(CourseModule module, Guid userId, string role, List<Lesson> lessons)

@@ -141,7 +141,7 @@ builder.Services.AddScoped<IReviewService, ReviewService>();
 builder.Services.AddScoped<IAssignmentService, AssignmentService>();
 builder.Services.AddScoped<INotificationService,NotificationService>();
 builder.Services.AddScoped<IMessagingService,MessagingService>();
-builder.Services.AddScoped<IPaymentGateway, DevelopmentPaymentGateway>();
+builder.Services.AddScoped<IPaymentGateway, UnavailablePaymentGateway>();
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IPracticeService, PracticeService>();
 builder.Services.AddHttpClient<IImageStorageService, SupabaseImageStorageService>();

@@ -41,7 +41,7 @@ public class LessonsController : ControllerBase
         return CreatedAtAction(nameof(GetByModule), new { courseModuleId = courseModuleId }, result);
     }
 
-    [HttpGet]
+    [HttpGet("~/api/course-modules/{courseModuleId:guid}/lessons")]
     public async Task<ActionResult<List<LessonDto>>> GetByModule(Guid courseModuleId)
     {
         var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;

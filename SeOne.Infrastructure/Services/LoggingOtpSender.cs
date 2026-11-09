@@ -12,6 +12,8 @@ public class LoggingOtpSender : IOtpSender
         _logger = logger;
     }
 
+    public bool IsConfigured => false;
+
     public Task SendAsync(
         string phoneNumber,
         string code,

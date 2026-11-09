@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Identity;
 using SeOne.Domain.Enums;
 
 namespace SeOne.Domain.Entities;
@@ -18,6 +18,8 @@ public class User : IdentityUser<Guid>
     public string? Bio { get; set; }
 
     public DateTime? DateOfBirth { get; set; }
+
+    public bool? ParentalConsent { get; set; }
 
     public string? Country { get; set; }
 

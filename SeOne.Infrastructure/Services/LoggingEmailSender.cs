@@ -13,6 +13,8 @@ public sealed class LoggingEmailSender : IEmailSender
         _logger = logger;
     }
 
+    public bool IsConfigured => false;
+
     public Task SendPasswordResetAsync(
         string email,
         string fullName,

@@ -64,6 +64,15 @@ public sealed class ClassesController : ApiControllerBase
         if (!string.IsNullOrWhiteSpace(subject))
             query = query.Where(classItem => classItem.Subject == subject.Trim());
 
+        // Apply availability before counting/pagination so full classes do not consume a page slot.
+        if (availableOnly == true)
+        {
+            query = query.Where(classItem =>
+                _db.Set<ClassEnrollment>().Count(enrollment =>
+                    enrollment.ClassId == classItem.Id && enrollment.Status != "cancelled")
+                < classItem.MaxCapacity);
+        }
+
         // Get total count before pagination
         var totalCount = await query.CountAsync(cancellationToken);
 
@@ -100,14 +109,6 @@ public sealed class ClassesController : ApiControllerBase
             .AsNoTracking()
             .Where(x => teacherIds.Contains(x.TeacherId))
             .ToDictionaryAsync(x => x.TeacherId, cancellationToken);
-
-        // Filter by available only (after getting counts)
-        if (availableOnly == true)
-        {
-            classesWithData = classesWithData
-                .Where(x => (enrollmentDict.TryGetValue(x.Id, out var count) ? count : 0) < x.MaxCapacity)
-                .ToList();
-        }
 
         // Map to DTOs
         var items = classesWithData.Select(classItem =>
@@ -426,7 +427,9 @@ public sealed class ClassesController : ApiControllerBase
         inviteCode = enrollment.InviteCode,
         invitedByStudentId = enrollment.InvitedByStudentId,
         enrolledAt = enrollment.EnrolledAt,
-        cancelledAt = enrollment.CancelledAt
+        cancelledAt = enrollment.CancelledAt,
+        paymentRequired = enrollment.FinalPrice > 0m,
+        paymentProcessingAvailable = false
     };
 
     private static decimal GetFinalPrice(CourseClass classItem) => classItem.FinalPrice;

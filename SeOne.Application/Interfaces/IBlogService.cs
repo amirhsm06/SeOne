@@ -9,6 +9,7 @@ public interface IBlogService
 {
     Task<List<BlogPostDto>> GetPublishedPostsAsync(string language);
     Task<BlogPostDto?> GetPublishedPostByIdAsync(Guid id);
+    Task<BlogPostDto?> GetPublishedPostBySlugAsync(string slug, string language);
     Task<BlogPostDto> CreateAsync(CreateBlogPostRequest request);
     Task<BlogPostDto?> UpdateAsync(Guid id, UpdateBlogPostRequest request);
     Task<bool> DeleteAsync(Guid id);

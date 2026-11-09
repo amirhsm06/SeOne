@@ -1,7 +1,8 @@
-﻿namespace SeOne.Application.Interfaces;
+namespace SeOne.Application.Interfaces;
 
 public interface IPaymentGateway
 {
+    bool IsConfigured { get; }
     Task<PaymentGatewayIntent> CreateIntentAsync(
         decimal amount,
         string currency,

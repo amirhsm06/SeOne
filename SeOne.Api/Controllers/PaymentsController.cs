@@ -1,6 +1,5 @@
-﻿using System.Security.Claims;
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using SeOne.Application.DTOs;
 using SeOne.Application.Interfaces;
@@ -9,231 +8,85 @@ namespace SeOne.Api.Controllers;
 
 [ApiController]
 [Route("api/payments")]
-[Authorize(Roles = "Student")]
-public class PaymentsController : ControllerBase
+[Authorize]
+public sealed class PaymentsController : ControllerBase
 {
+    private const string DisabledMessage = "Payment processing is not enabled yet. Configure a real payment gateway and receipt storage before accepting payments.";
     private readonly IPaymentService _paymentService;
 
-    public PaymentsController(
-        IPaymentService paymentService)
-    {
-        _paymentService = paymentService;
-    }
+    public PaymentsController(IPaymentService paymentService) => _paymentService = paymentService;
 
     [HttpPost]
     [HttpPost("create-intent")]
-    public async Task<ActionResult<PaymentIntentDto>>
-        CreateIntent(
-            [FromBody] CreatePaymentIntentRequest request)
-    {
-        var studentId = GetUserId();
-
-        var result =
-            await _paymentService
-                .CreatePaymentIntentAsync(
-                    studentId,
-                    request.CourseId);
-
-        if (result is null)
-        {
-            return BadRequest(new
-            {
-                message =
-                    "The course is unavailable, free, or you are already enrolled."
-            });
-        }
-
-        return Ok(result);
-    }
+    [Authorize(Roles = "Student")]
+    public IActionResult CreateIntent([FromBody] CreatePaymentIntentRequest request)
+        => PaymentUnavailable();
 
     [HttpPost("{paymentId:guid}/confirm")]
-    public async Task<ActionResult<PaymentDto>>
-        Confirm(
-            Guid paymentId,
-            [FromBody] ConfirmPaymentRequest request)
-    {
-        var studentId = GetUserId();
-
-        var result =
-            await _paymentService
-                .ConfirmPaymentAsync(
-                    studentId,
-                    paymentId,
-                    request.ClientSecret);
-
-        if (result is null)
-        {
-            return BadRequest(new
-            {
-                message =
-                    "Payment confirmation failed."
-            });
-        }
-
-        return Ok(result);
-    }
+    [Authorize(Roles = "Student")]
+    public IActionResult Confirm(Guid paymentId, [FromBody] ConfirmPaymentRequest request)
+        => PaymentUnavailable();
 
     [HttpGet("my")]
-    public async Task<ActionResult<List<PaymentDto>>>
-        GetMyPayments()
-    {
-        var studentId = GetUserId();
-
-        return Ok(
-            await _paymentService
-                .GetMyPaymentsAsync(studentId));
-    }
+    [Authorize(Roles = "Student")]
+    public async Task<ActionResult<List<PaymentDto>>> GetMyPayments()
+        => Ok(await _paymentService.GetMyPaymentsAsync(GetUserId()));
 
     [HttpGet("{paymentId:guid}")]
-    public async Task<ActionResult<PaymentDto>>
-        GetById(Guid paymentId)
+    [Authorize(Roles = "Student")]
+    public async Task<ActionResult<PaymentDto>> GetById(Guid paymentId)
     {
-        var studentId = GetUserId();
-
-        var result =
-            await _paymentService
-                .GetByIdAsync(
-                    studentId,
-                    paymentId);
-
-        if (result is null)
-        {
-            return NotFound();
-        }
-
-        return Ok(result);
+        var result = await _paymentService.GetByIdAsync(GetUserId(), paymentId);
+        return result is null ? NotFound() : Ok(result);
     }
 
     [HttpPost("manual-class-receipt/{classEnrollmentId:guid}")]
+    [Authorize(Roles = "Student")]
     [Consumes("multipart/form-data")]
-    public async Task<ActionResult<ReceiptUploadResponse>> UploadManualReceipt(
-       Guid classEnrollmentId,
-       IFormFile receiptFile,
-       [FromForm] string note = "")
-    {
-        var studentId = GetUserId();
-
-        if (receiptFile == null || receiptFile.Length == 0)
-        {
-            return BadRequest(new { message = "Receipt file is required." });
-        }
-
-        try
-        {
-            using var stream = receiptFile.OpenReadStream();
-            var result = await _paymentService
-                .UploadReceiptAsync(
-                    studentId,
-                    classEnrollmentId,
-                    receiptFile.FileName,
-                    receiptFile.ContentType,
-                    stream,
-                    note);
-
-            if (result is null)
-            {
-                return BadRequest(new { message = "Receipt upload failed." });
-            }
-
-            return Ok(result);
-        }
-        catch (ArgumentException ex)
-        {
-            return BadRequest(new { message = ex.Message });
-        }
-    }
+    public IActionResult UploadManualReceipt(Guid classEnrollmentId, IFormFile? receiptFile, [FromForm] string note = "")
+        => PaymentUnavailable();
 
     [HttpPost("{paymentId:guid}/receipt")]
+    [Authorize(Roles = "Student")]
     [Consumes("multipart/form-data")]
-    public async Task<ActionResult<ReceiptUploadResponse>> UploadPaymentReceipt(
-        Guid paymentId,
-        IFormFile receiptFile,
-        [FromForm] string note = "")
-    {
-        if (receiptFile is null || receiptFile.Length == 0)
-            return BadRequest(new { message = "Receipt file is required." });
-
-        try
-        {
-            using var stream = receiptFile.OpenReadStream();
-            var result = await _paymentService.UploadReceiptForPaymentAsync(
-                GetUserId(),
-                paymentId,
-                receiptFile.FileName,
-                receiptFile.ContentType,
-                stream,
-                note);
-
-            return result is null ? NotFound() : Ok(result);
-        }
-        catch (ArgumentException ex)
-        {
-            return BadRequest(new { message = ex.Message });
-        }
-    }
+    public IActionResult UploadPaymentReceipt(Guid paymentId, IFormFile? receiptFile, [FromForm] string note = "")
+        => PaymentUnavailable();
 
     [HttpGet("pending-receipts")]
     [Authorize(Roles = "Admin,Teacher")]
-    public async Task<ActionResult<List<PendingReceiptDto>>> GetPendingReceipts()
-    {
-        return Ok(
-            await _paymentService
-                .GetPendingReceiptsAsync());
-    }
+    public IActionResult GetPendingReceipts() => PaymentUnavailable();
 
     [HttpPut("{paymentId:guid}/verify-receipt")]
     [Authorize(Roles = "Admin")]
-    public async Task<ActionResult<VerifyReceiptResponse>> VerifyReceipt(
-        Guid paymentId,
-        [FromBody] VerifyReceiptRequest request)
-    {
-        var adminId = GetUserId();
-
-        try
-        {
-            var result = await _paymentService
-                .VerifyReceiptAsync(
-                    paymentId,
-                    adminId,
-                    request.IsApproved,
-                    request.RejectionReason);
-
-            if (result is null)
-            {
-                return NotFound();
-            }
-
-            return Ok(result);
-        }
-        catch (ArgumentException ex)
-        {
-            return BadRequest(new { message = ex.Message });
-        }
-    }
+    public IActionResult VerifyReceipt(Guid paymentId, [FromBody] VerifyReceiptRequest request)
+        => PaymentUnavailable();
 
     [HttpGet("manual-payment-settings")]
     [HttpGet("~/api/payment/settings")]
     [AllowAnonymous]
     public async Task<ActionResult<ManualPaymentSettingsDto>> GetManualPaymentSettings()
     {
-        return Ok(
-            await _paymentService
-                .GetManualPaymentSettingsAsync());
+        var settings = await _paymentService.GetManualPaymentSettingsAsync();
+        // Receipt storage has not been implemented/configured, so the public API must not advertise it as enabled.
+        settings.IsEnabled = false;
+        settings.WhatsAppContactNumber = string.Empty;
+        settings.WhatsAppLink = string.Empty;
+        return Ok(settings);
     }
+
+    private IActionResult PaymentUnavailable()
+        => StatusCode(StatusCodes.Status503ServiceUnavailable, new ProblemDetails
+        {
+            Status = StatusCodes.Status503ServiceUnavailable,
+            Title = "Payments are not configured",
+            Detail = DisabledMessage
+        });
 
     private Guid GetUserId()
     {
-        var claim =
-            User.FindFirstValue(
-                ClaimTypes.NameIdentifier);
-
-        if (!Guid.TryParse(
-                claim,
-                out var userId))
-        {
+        var claim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!Guid.TryParse(claim, out var userId))
             throw new UnauthorizedAccessException();
-        }
-
         return userId;
     }
 }

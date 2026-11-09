@@ -112,6 +112,53 @@ public class BlogService : IBlogService
             .ToListAsync();
     }
 
+    public async Task<BlogPostDto?> GetPublishedPostBySlugAsync(string slug, string language)
+    {
+        if (string.IsNullOrWhiteSpace(slug))
+            return null;
+
+        var normalizedSlug = NormalizeSlug(slug);
+        var normalizedLanguage = string.IsNullOrWhiteSpace(language)
+            ? "en"
+            : language.Trim().ToLowerInvariant();
+
+        // Slugs are derived from the existing title column. This avoids a schema change
+        // while preserving support for the frontend's title-derived article URLs.
+        var candidates = await _context.Set<BlogPost>()
+            .AsNoTracking()
+            .Where(post => post.IsPublished && post.Language == normalizedLanguage)
+            .OrderByDescending(post => post.CreatedAt)
+            .ToListAsync();
+
+        var match = candidates.FirstOrDefault(post =>
+            string.Equals(NormalizeSlug(post.Title), normalizedSlug, StringComparison.Ordinal));
+
+        return match is null ? null : MapToDto(match);
+    }
+
+    private static string NormalizeSlug(string value)
+    {
+        var result = new System.Text.StringBuilder(value.Length);
+        var pendingSeparator = false;
+
+        foreach (var character in value.Trim().ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(character))
+            {
+                if (pendingSeparator && result.Length > 0)
+                    result.Append('-');
+                result.Append(character);
+                pendingSeparator = false;
+            }
+            else
+            {
+                pendingSeparator = true;
+            }
+        }
+
+        return result.ToString().Trim('-');
+    }
+
     public async Task<BlogPostDto?> GetPublishedPostByIdAsync(Guid id)
     {
         return await _context.Set<BlogPost>()
