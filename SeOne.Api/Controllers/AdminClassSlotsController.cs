@@ -727,8 +727,12 @@ public sealed class AdminClassSlotsController : ControllerBase
         {
             profiles.TryGetValue(teacher.Id, out var profile);
             var requestedTeacherGroup = slot.Subject?.Trim();
-            if (!string.IsNullOrWhiteSpace(requestedTeacherGroup) &&
-                !requestedTeacherGroup.Equals("all", StringComparison.OrdinalIgnoreCase) &&
+            // Only apply the teacher-language filter for the explicit values
+            // offered by the admin UI. Older class rows may store a subject/category
+            // such as IELTS here; those values must not exclude every teacher.
+            if (requestedTeacherGroup is not null &&
+                (requestedTeacherGroup.Equals("english", StringComparison.OrdinalIgnoreCase) ||
+                 requestedTeacherGroup.Equals("german", StringComparison.OrdinalIgnoreCase)) &&
                 (string.IsNullOrWhiteSpace(profile?.TeachingLanguage) ||
                  !profile.TeachingLanguage.Contains(requestedTeacherGroup, StringComparison.OrdinalIgnoreCase)))
                 continue;
