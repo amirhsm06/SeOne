@@ -569,7 +569,7 @@ public class CompatibilityController : ApiControllerBase
 
     [HttpGet("teacher/class-slots")]
     [Authorize(Roles = "Teacher")]
-    public async Task<IActionResult> MyClassSlots()
+    public async Task<IActionResult> MyClassSlots(CancellationToken cancellationToken)
     {
         var teacherId = RequireUserId();
         var assignments = await _db.Set<ClassSlotTeacherAssignment>()
@@ -579,11 +579,16 @@ public class CompatibilityController : ApiControllerBase
             .Where(x => x.TeacherId == teacherId && x.Status == "confirmed" && x.ClassSlot.Status == "scheduled")
             .OrderBy(x => x.ClassSlot.ScheduledDate)
             .ThenBy(x => x.ClassSlot.StartTime)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
+
+        // Backfill course-level permissions for teachers assigned before the
+        // CourseInstanceTeacher compatibility link was introduced.
+        foreach (var assignment in assignments)
+            await EnsureTeacherCourseAccessAsync(assignment.ClassSlot.CourseId, teacherId, cancellationToken);
 
         var slotIds = assignments.Select(x => x.ClassSlotId).Distinct().ToArray();
         foreach (var assignedSlotId in slotIds)
-            await _classGroupProvisioningService.EnsureForClassAsync(assignedSlotId);
+            await _classGroupProvisioningService.EnsureForClassAsync(assignedSlotId, cancellationToken);
 
         var classGroups = await (
             from member in _db.Set<ClassGroupMember>().AsNoTracking()
@@ -756,6 +761,44 @@ public class CompatibilityController : ApiControllerBase
                 source = "cambridge"
             })
         });
+    }
+
+    private async Task EnsureTeacherCourseAccessAsync(
+        Guid courseId,
+        Guid teacherId,
+        CancellationToken cancellationToken)
+    {
+        var alreadyAssigned = await _db.Set<CourseInstanceTeacher>().AnyAsync(
+            x => x.TeacherId == teacherId && x.CourseInstance.CourseId == courseId,
+            cancellationToken);
+        if (alreadyAssigned)
+            return;
+
+        var instance = await _db.Set<CourseInstance>()
+            .Where(x => x.CourseId == courseId)
+            .OrderBy(x => x.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (instance is null)
+        {
+            instance = new CourseInstance
+            {
+                Id = Guid.NewGuid(),
+                CourseId = courseId,
+                CreatedAt = DateTime.UtcNow
+            };
+            _db.Set<CourseInstance>().Add(instance);
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+
+        _db.Set<CourseInstanceTeacher>().Add(new CourseInstanceTeacher
+        {
+            Id = Guid.NewGuid(),
+            CourseInstanceId = instance.Id,
+            TeacherId = teacherId,
+            CreatedAt = DateTime.UtcNow
+        });
+        await _db.SaveChangesAsync(cancellationToken);
     }
 
     private async Task<object> BuildModuleResponseAsync(CourseModule module, Guid userId, string role, List<Lesson> lessons)

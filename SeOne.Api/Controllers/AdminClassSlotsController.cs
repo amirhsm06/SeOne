@@ -154,6 +154,27 @@ public sealed class AdminClassSlotsController : ControllerBase
         return Ok(enrollments);
     }
 
+    [HttpDelete("{slotId:guid}/enrollments/{enrollmentId:guid}")]
+    public async Task<IActionResult> CancelSlotEnrollment(
+        Guid slotId,
+        Guid enrollmentId,
+        CancellationToken cancellationToken)
+    {
+        var enrollment = await _db.Set<ClassEnrollment>()
+            .FirstOrDefaultAsync(x => x.Id == enrollmentId && x.ClassId == slotId, cancellationToken);
+        if (enrollment is null)
+            return NotFound(new { message = "Class enrollment not found for this slot." });
+
+        if (enrollment.Status == "cancelled")
+            return NoContent();
+
+        enrollment.Status = "cancelled";
+        enrollment.CancelledAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(cancellationToken);
+        await _classGroupProvisioningService.EnsureForClassAsync(slotId, cancellationToken);
+        return NoContent();
+    }
+
     [HttpPost("{slotId:guid}/enrollments")]
     public async Task<IActionResult> AddSlotEnrollment(
         Guid slotId,
@@ -168,25 +189,64 @@ public sealed class AdminClassSlotsController : ControllerBase
         if (!await _db.Users.AnyAsync(x => x.Id == request.StudentId && x.Role == UserRole.Student, cancellationToken))
             return BadRequest(new { message = "A valid studentId is required." });
 
-        if (await _db.Set<ClassEnrollment>().AnyAsync(x => x.ClassId == slotId && x.StudentId == request.StudentId, cancellationToken))
-            return Conflict(new { message = "An enrollment record already exists for this student and slot." });
+        var enrollment = await _db.Set<ClassEnrollment>()
+            .FirstOrDefaultAsync(x => x.ClassId == slotId && x.StudentId == request.StudentId, cancellationToken);
+        if (enrollment is not null && enrollment.Status != "cancelled")
+            return Conflict(new { message = "The student is already enrolled in this class slot." });
+
+        var enrolledInAnotherGroup = await _db.Set<ClassEnrollment>().AnyAsync(
+            x => x.StudentId == request.StudentId &&
+                 x.ClassId != slotId &&
+                 x.CourseClass.CourseId == slot.CourseId &&
+                 x.Status != "cancelled",
+            cancellationToken);
+        if (enrolledInAnotherGroup)
+            return Conflict(new { message = "The student is already enrolled in another group for this course. Move the existing enrollment instead." });
 
         var currentCount = await _db.Set<ClassEnrollment>()
             .CountAsync(x => x.ClassId == slotId && x.Status != "cancelled", cancellationToken);
         if (currentCount >= slot.MaxCapacity)
             return Conflict(new { message = "This class slot is full." });
 
-        var enrollment = new ClassEnrollment
+        var now = DateTime.UtcNow;
+        var discountPercent = slot.BasePrice <= 0
+            ? 0
+            : Math.Clamp((slot.BasePrice - slot.FinalPrice) / slot.BasePrice * 100m, 0m, 100m);
+
+        if (enrollment is null)
         {
-            Id = Guid.NewGuid(),
-            ClassId = slotId,
-            StudentId = request.StudentId,
-            FinalPrice = slot.FinalPrice,
-            DiscountPercent = slot.BasePrice <= 0 ? 0 : Math.Clamp((slot.BasePrice - slot.FinalPrice) / slot.BasePrice * 100m, 0m, 100m),
-            Status = "confirmed",
-            EnrolledAt = DateTime.UtcNow
-        };
-        _db.Add(enrollment);
+            enrollment = new ClassEnrollment
+            {
+                Id = Guid.NewGuid(),
+                ClassId = slotId,
+                StudentId = request.StudentId,
+                EnrolledAt = now
+            };
+            _db.Add(enrollment);
+        }
+
+        enrollment.FinalPrice = slot.FinalPrice;
+        enrollment.DiscountPercent = discountPercent;
+        enrollment.Status = "confirmed";
+        enrollment.CancelledAt = null;
+        enrollment.EnrolledAt = now;
+
+        // Course learning APIs authorize against Enrollment, while class chat and
+        // class listings use ClassEnrollment. Keep both records consistent.
+        var courseEnrollmentExists = await _db.Set<Enrollment>().AnyAsync(
+            x => x.StudentId == request.StudentId && x.CourseId == slot.CourseId,
+            cancellationToken);
+        if (!courseEnrollmentExists)
+        {
+            _db.Add(new Enrollment
+            {
+                Id = Guid.NewGuid(),
+                StudentId = request.StudentId,
+                CourseId = slot.CourseId,
+                EnrolledAt = now
+            });
+        }
+
         await _db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         await _classGroupProvisioningService.EnsureForClassAsync(slotId, cancellationToken);
@@ -221,9 +281,9 @@ public sealed class AdminClassSlotsController : ControllerBase
         if (destination.Id == enrollment.ClassId)
             return BadRequest(new { message = "The enrollment is already in this class slot." });
 
-        if (await _db.Set<ClassEnrollment>().AnyAsync(
-                x => x.ClassId == destination.Id && x.StudentId == enrollment.StudentId && x.Status != "cancelled",
-                cancellationToken))
+        var destinationEnrollment = await _db.Set<ClassEnrollment>()
+            .FirstOrDefaultAsync(x => x.ClassId == destination.Id && x.StudentId == enrollment.StudentId, cancellationToken);
+        if (destinationEnrollment is not null && destinationEnrollment.Status != "cancelled")
             return Conflict(new { message = "The student is already enrolled in the destination slot." });
 
         var destinationCount = await _db.Set<ClassEnrollment>()
@@ -232,7 +292,42 @@ public sealed class AdminClassSlotsController : ControllerBase
             return Conflict(new { message = "The destination class slot is full." });
 
         var sourceSlotId = enrollment.ClassId;
-        enrollment.ClassId = destination.Id;
+        var now = DateTime.UtcNow;
+        ClassEnrollment movedEnrollment;
+        if (destinationEnrollment is not null)
+        {
+            enrollment.Status = "cancelled";
+            enrollment.CancelledAt = now;
+
+            destinationEnrollment.Status = "confirmed";
+            destinationEnrollment.CancelledAt = null;
+            destinationEnrollment.EnrolledAt = now;
+            destinationEnrollment.FinalPrice = destination.FinalPrice;
+            destinationEnrollment.DiscountPercent = destination.BasePrice <= 0
+                ? 0
+                : Math.Clamp((destination.BasePrice - destination.FinalPrice) / destination.BasePrice * 100m, 0m, 100m);
+            movedEnrollment = destinationEnrollment;
+        }
+        else
+        {
+            enrollment.ClassId = destination.Id;
+            movedEnrollment = enrollment;
+        }
+
+        var courseEnrollmentExists = await _db.Set<Enrollment>().AnyAsync(
+            x => x.StudentId == enrollment.StudentId && x.CourseId == destination.CourseId,
+            cancellationToken);
+        if (!courseEnrollmentExists)
+        {
+            _db.Add(new Enrollment
+            {
+                Id = Guid.NewGuid(),
+                StudentId = enrollment.StudentId,
+                CourseId = destination.CourseId,
+                EnrolledAt = now
+            });
+        }
+
         await _db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
@@ -241,12 +336,12 @@ public sealed class AdminClassSlotsController : ControllerBase
 
         return Ok(new
         {
-            id = enrollment.Id,
+            id = movedEnrollment.Id,
             sourceSlotId,
             destinationSlotId = destination.Id,
-            studentId = enrollment.StudentId,
-            status = enrollment.Status,
-            finalPrice = enrollment.FinalPrice
+            studentId = movedEnrollment.StudentId,
+            status = movedEnrollment.Status,
+            finalPrice = movedEnrollment.FinalPrice
         });
     }
 
@@ -298,6 +393,8 @@ public sealed class AdminClassSlotsController : ControllerBase
         }
 
         await _db.SaveChangesAsync(cancellationToken);
+        if (status == "confirmed")
+            await EnsureTeacherCourseAccessAsync(slot.CourseId, assignment.TeacherId, cancellationToken);
         await _classGroupProvisioningService.EnsureForClassAsync(slot.Id, cancellationToken);
         return Ok(new { assignmentId = assignment.Id, slotId = assignment.ClassSlotId, teacherId = assignment.TeacherId, status = assignment.Status });
     }
@@ -358,6 +455,7 @@ public sealed class AdminClassSlotsController : ControllerBase
 
         _db.Set<CourseClass>().Add(slot);
         await _db.SaveChangesAsync(cancellationToken);
+        await _classGroupProvisioningService.EnsureForClassAsync(slot.Id, cancellationToken);
 
         return CreatedAtAction(nameof(CreateSlot), new { slotId = slot.Id }, new
         {
@@ -450,6 +548,7 @@ public sealed class AdminClassSlotsController : ControllerBase
         var currentConfirmed = slotAssignments.FirstOrDefault(x => x.Status == "confirmed");
         if (currentConfirmed is not null && currentConfirmed.TeacherId == teacher.Id)
         {
+            await EnsureTeacherCourseAccessAsync(slot.CourseId, teacher.Id, cancellationToken);
             await _classGroupProvisioningService.EnsureForClassAsync(slotId, cancellationToken);
             return Ok(new
             {
@@ -478,6 +577,7 @@ public sealed class AdminClassSlotsController : ControllerBase
         _db.Add(assignment);
         slot.TeacherId = teacher.Id;
         await _db.SaveChangesAsync(cancellationToken);
+        await EnsureTeacherCourseAccessAsync(slot.CourseId, teacher.Id, cancellationToken);
         await _classGroupProvisioningService.EnsureForClassAsync(slotId, cancellationToken);
 
         return Ok(new
@@ -553,6 +653,47 @@ public sealed class AdminClassSlotsController : ControllerBase
         };
     }
 
+    private async Task EnsureTeacherCourseAccessAsync(
+        Guid courseId,
+        Guid teacherId,
+        CancellationToken cancellationToken)
+    {
+        // Most existing teacher-facing learning endpoints still check the legacy
+        // CourseInstanceTeacher relationship. Creating this link makes a teacher
+        // assigned to a scheduled class able to access that course as well.
+        var alreadyAssigned = await _db.Set<CourseInstanceTeacher>().AnyAsync(
+            x => x.TeacherId == teacherId && x.CourseInstance.CourseId == courseId,
+            cancellationToken);
+        if (alreadyAssigned)
+            return;
+
+        var instance = await _db.Set<CourseInstance>()
+            .Where(x => x.CourseId == courseId)
+            .OrderBy(x => x.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (instance is null)
+        {
+            instance = new CourseInstance
+            {
+                Id = Guid.NewGuid(),
+                CourseId = courseId,
+                CreatedAt = DateTime.UtcNow
+            };
+            _db.Set<CourseInstance>().Add(instance);
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+
+        _db.Set<CourseInstanceTeacher>().Add(new CourseInstanceTeacher
+        {
+            Id = Guid.NewGuid(),
+            CourseInstanceId = instance.Id,
+            TeacherId = teacherId,
+            CreatedAt = DateTime.UtcNow
+        });
+        await _db.SaveChangesAsync(cancellationToken);
+    }
+
     private async Task<List<AvailableClassSlotTeacherDto>> GetAvailableTeachersAsync(
         CourseClass slot,
         CancellationToken cancellationToken)
@@ -584,6 +725,18 @@ public sealed class AdminClassSlotsController : ControllerBase
         var result = new List<AvailableClassSlotTeacherDto>();
         foreach (var teacher in teachers)
         {
+            profiles.TryGetValue(teacher.Id, out var profile);
+            var requestedTeacherGroup = slot.Subject?.Trim();
+            // Only apply the teacher-language filter for the explicit values
+            // offered by the admin UI. Older class rows may store a subject/category
+            // such as IELTS here; those values must not exclude every teacher.
+            if (requestedTeacherGroup is not null &&
+                (requestedTeacherGroup.Equals("english", StringComparison.OrdinalIgnoreCase) ||
+                 requestedTeacherGroup.Equals("german", StringComparison.OrdinalIgnoreCase)) &&
+                (string.IsNullOrWhiteSpace(profile?.TeachingLanguage) ||
+                 !profile.TeachingLanguage.Contains(requestedTeacherGroup, StringComparison.OrdinalIgnoreCase)))
+                continue;
+
             var teacherTimeZone = TimeZoneInfo.Utc;
             if (!string.IsNullOrWhiteSpace(teacher.Timezone) &&
                 ClassSlotTime.TryGetTimeZone(teacher.Timezone, out var parsedTimeZone, out _))
@@ -619,7 +772,6 @@ public sealed class AdminClassSlotsController : ControllerBase
             if (hasConflict)
                 continue;
 
-            profiles.TryGetValue(teacher.Id, out var profile);
             var matched = $"{localStart:dddd}, {localStart:HH:mm}–{localEnd:HH:mm}";
             result.Add(new AvailableClassSlotTeacherDto
             {
