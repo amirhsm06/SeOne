@@ -17,8 +17,13 @@ var configuredOrigins =
         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
     ?? [];
 
+// Normalize configured origins so accidental trailing slashes do not break CORS.
+// Keep the previous production frontend origin temporarily for compatibility.
 var allowedOrigins = configuredOrigins
+    .Select(origin => origin.Trim().TrimEnd('/'))
+    .Where(origin => !string.IsNullOrWhiteSpace(origin))
     .Concat([
+        "https://seone-front.vercel.app",
         "https://se-one-delta.vercel.app",
         "http://localhost:3000"
     ])
@@ -180,9 +185,9 @@ app.Run();
 
 static async Task SeedAdminAsync(WebApplication app)
 {
-	var email = app.Configuration["SEONE_ADMIN_EMAIL"];
-	var password = app.Configuration["SEONE_ADMIN_PASSWORD"];
-	var fullName = app.Configuration["SEONE_ADMIN_NAME"] ?? "SE ONE Administrator";
+    var email = app.Configuration["SEONE_ADMIN_EMAIL"];
+    var password = app.Configuration["SEONE_ADMIN_PASSWORD"];
+    var fullName = app.Configuration["SEONE_ADMIN_NAME"] ?? "SE ONE Administrator";
 
     if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
     {
